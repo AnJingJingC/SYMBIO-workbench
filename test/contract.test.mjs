@@ -72,7 +72,9 @@ test('health 路由返回完整结构；桥不可用时如实报离线', async (
 test('所有路由都在自己的 /api/symbio/ 前缀下', () => {
   const paths = createApiRoutes({}).map(r => r.path)
   assert.deepEqual(paths, [
-    `${API_PREFIX}/health`, `${API_PREFIX}/state`, `${API_PREFIX}/bridge/health`,
+    `${API_PREFIX}/health`, `${API_PREFIX}/state`,
+    `${API_PREFIX}/activity`, `${API_PREFIX}/load`,
+    `${API_PREFIX}/bridge/health`,
     `${API_PREFIX}/bridge/login`, `${API_PREFIX}/bridge/hide`,
     `${API_PREFIX}/tools`, `${API_PREFIX}/tools/run`, `${API_PREFIX}/ask`, `${API_PREFIX}/intake`,
   ])
@@ -376,4 +378,88 @@ test('客户端面板无头渲染冒烟（stub React 递归渲染整棵元素树
   assert.equal(typeof panel, 'function', 'desktopWorkbenches.register 应收到面板组件')
   const tree = panel()
   assert.ok(tree && typeof tree === 'object', '面板应能无头渲染出完整元素树')
+})
+
+test('亮灯：心跳目录不存在是正常状态，不是故障', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'symbio-hb-empty-'))
+  const s = await readState(root)
+  assert.equal(s.activity.available, true, '磁盘上没有心跳目录 = 还没有活动，不该报"不可读"')
+  assert.equal(s.activity.active.length, 0)
+  assert.equal(s.activity.count, 0)
+})
+
+test('亮灯：过期的活动必须熄灭，不能假装还在干活', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'symbio-hb-ttl-'))
+  await mkdir(path.join(root, 'memory/10-shared/心跳'), { recursive: true })
+  const now = Date.now()
+  const write = (scene, at, ttl) => writeFile(
+    path.join(root, 'memory/10-shared/心跳', `${scene}.json`),
+    JSON.stringify({ scene, phase: 'think', phaseLabel: '思考中', detail: 't', at: new Date(at).toISOString(), ttlMs: ttl }),
+  )
+  await write('fresh', now - 1000, 60000)
+  await write('stale', now - 120000, 60000)
+
+  const s = await readState(root)
+  assert.equal(s.activity.active.length, 1, '只应剩未过期的那一个')
+  assert.equal(s.activity.active[0].scene, 'fresh')
+  assert.equal(s.activity.stale, 1, '过期数要如实统计')
+  assert.ok(s.activity.active[0].remainMs > 0 && s.activity.active[0].remainMs <= 60000)
+})
+
+test('activity 路由：轻量轮询接口，字段齐全', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'symbio-act-'))
+  const routes = createApiRoutes({ bridgeUrl: 'http://127.0.0.1:1', dataRoot: root })
+  const res = await routes.find(r => r.path === `${API_PREFIX}/activity`).fetch()
+  assert.equal(res.status, 200)
+  const body = await res.json()
+  assert.deepEqual(Object.keys(body).sort(), ['active', 'available', 'checkedAt', 'ok', 'reason', 'stale', 'total'])
+  assert.equal(body.ok, true)
+  assert.ok(Array.isArray(body.active))
+})
+
+test('负载胶囊：工具缺失时如实报错，绝不编造一个"看起来正常"的 CPU 数字', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'symbio-load-miss-'))
+  const routes = createApiRoutes({ bridgeUrl: 'http://127.0.0.1:1', dataRoot: root })
+  const body = await (await routes.find(r => r.path === `${API_PREFIX}/load`).fetch()).json()
+  assert.equal(body.ok, false)
+  assert.equal(body.cpu, undefined, '失败时不许出现 cpu 字段')
+  assert.equal(body.ram, undefined)
+  assert.ok(body.errorType, '必须给出错误类型')
+})
+
+test('三层库：目录缺失时 available:false，不填 0 当"空库"', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'symbio-libs-'))
+  const s = await readState(root)
+  assert.equal(s.libraries.sharedSkills.available, false)
+  assert.equal(s.libraries.parts.available, false)
+  assert.equal(s.libraries.projects.available, false)
+  assert.equal(s.libraries.parts.count, 0)
+  assert.ok(s.libraries.parts.reason, '不可读必须带原因')
+})
+
+test('三层库：真机数据源（若存在）三库字段均可用', async () => {
+  const real = 'E:/SYMBIO'
+  const s = await readState(real)
+  const libs = s.libraries
+  for (const key of ['sharedSkills', 'parts', 'projects']) {
+    assert.ok(libs[key], `${key} 必须存在`)
+    assert.equal(typeof libs[key].count, 'number', `${key}.count 必须是数字`)
+    assert.ok(Array.isArray(libs[key].items), `${key}.items 必须是数组`)
+  }
+  // 共享技能必须能区分"已提升"与"已装配"——这是它和普通技能目录的唯一价值
+  if (libs.sharedSkills.available) {
+    assert.equal(typeof libs.sharedSkills.installed, 'number')
+    assert.ok(libs.sharedSkills.installed <= libs.sharedSkills.count, '已装配数不可能超过共享数')
+  }
+})
+
+test('面板：亮灯与负载两个胶囊都在顶栏，且拓扑能接收活动信号', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const src = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('LightCapsule'), '顶栏必须有亮灯胶囊')
+  assert.ok(src.includes('LoadCapsule'), '顶栏必须有负载胶囊')
+  assert.ok(src.includes('Libraries'), '必须有共享层·库区块')
+  assert.ok(/h\(Topology, \{ activity \}\)/.test(src), '拓扑必须接收活动信号（否则亮灯亮不到拓扑上）')
+  assert.ok(src.includes('/api/symbio/activity'), '亮灯必须接 /activity')
+  assert.ok(src.includes('/api/symbio/load'), '负载胶囊必须接 /load')
 })

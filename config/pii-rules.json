@@ -10,7 +10,7 @@
         { "id": "cn-id-card", "kind": "identity", "regex": "(?<![0-9])[1-9]\\d{5}(?:19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])\\d{3}[0-9Xx](?![0-9])", "note": "中国大陆 18 位身份证" },
         { "id": "bank-card", "kind": "finance", "regex": "(?<![0-9])(?:6[0-9]{15,18}|4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14})(?![0-9])", "note": "银行卡号（62/4/5 开头）" },
         { "id": "passport", "kind": "identity", "regex": "(?<![0-9A-Za-z])[EGDSP]\\d{8}(?![0-9A-Za-z])", "note": "护照号" },
-        { "id": "api-key-literal", "kind": "credential", "regex": "(?i)(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})", "note": "常见 API Key 形态" },
+        { "id": "api-key-literal", "kind": "credential", "flags": "gi", "regex": "(?:sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[abp]-[A-Za-z0-9-]{10,})", "note": "常见 API Key 形态（大小写不敏，靠 flags:gi，不要写内联 (?i)——JS 不支持，会让整条规则静默失效）" },
         { "id": "private-key-block", "kind": "credential", "regex": "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]{20,}", "note": "私钥块" }
       ],
       "keywords": ["密码", "口令", "私钥", "密钥", "token", "access_key", "secret_key", "验证码", "银行卡密码", "指纹", "人脸", "虹膜", "DNA", "基因检测"]

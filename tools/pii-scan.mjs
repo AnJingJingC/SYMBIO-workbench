@@ -6,7 +6,8 @@
  *   node tools/pii-scan.mjs --file "path/to/file.txt"
  *   echo "文本" | node tools/pii-scan.mjs --stdin
  *   node tools/pii-scan.mjs --file x.txt --redact      # 额外输出脱敏文本
- * 退出码：0 = PASS/REDACT，2 = BLOCK（L1 命中）
+ *   node tools/pii-scan.mjs --check-rules             # 自检：所有规则能否编译（3 = 有坏规则）
+ * 退出码：0 = PASS/REDACT，2 = BLOCK（L1 命中），3 = 规则自检失败
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,13 +22,14 @@ function die(msg, code = 1) {
 }
 
 function parseArgs(argv) {
-  const out = { text: null, file: null, stdin: false, redact: false, json: true };
+  const out = { text: null, file: null, stdin: false, redact: false, json: true, checkRules: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--text') out.text = argv[++i];
     else if (a === '--file') out.file = argv[++i];
     else if (a === '--stdin') out.stdin = true;
     else if (a === '--redact') out.redact = true;
+    else if (a === '--check-rules') out.checkRules = true;
     else if (a === '--help' || a === '-h') {
       console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0]);
       process.exit(0);
@@ -56,15 +58,25 @@ function loadRules() {
   }
 }
 
+// 坏规则必须报出来。曾经这里 catch 后直接 continue，结果一条写了 (?i) 的规则
+// （JS 不支持内联标志）永远编译失败 → **API Key 那条 L1 硬红线一直是死的**，
+// 而输出照样显示 PASS。没在跑的规则比没有规则更危险：你以为有保护。
+const ruleErrors = [];
+
+function compileRule(p) {
+  try {
+    return new RegExp(p.regex, p.flags || 'g');
+  } catch (e) {
+    ruleErrors.push({ id: p.id, error: String(e && e.message).replace(/^.*?: /, '') });
+    return null;
+  }
+}
+
 function scanLevel(text, levelDef) {
   const hits = [];
   for (const p of levelDef.patterns || []) {
-    let re;
-    try {
-      re = new RegExp(p.regex, 'g');
-    } catch {
-      continue;
-    }
+    const re = compileRule(p);
+    if (!re) continue;
     const found = [];
     let m;
     let guard = 0;
@@ -120,12 +132,8 @@ function redact(text, rules) {
     const lv = rules.levels?.[key];
     if (!lv) continue;
     for (const p of lv.patterns || []) {
-      let re;
-      try {
-        re = new RegExp(p.regex, 'g');
-      } catch {
-        continue;
-      }
+      const re = compileRule(p);
+      if (!re) continue;
       out = out.replace(re, (match) => {
         const kind = p.kind || 'unknown';
         const token = map[kind] || kind.toUpperCase();
@@ -141,6 +149,24 @@ function redact(text, rules) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  // 规则自检：一条规则编译不过，它就不在保护你。必须能单独查出来。
+  if (args.checkRules) {
+    const rules = loadRules();
+    if (rules.__missing) die('config/pii-rules.json 不存在', 3);
+    if (rules.__broken) die(`config/pii-rules.json 解析失败：${rules.__broken}`, 3);
+    const bad = [];
+    let total = 0;
+    for (const key of ['L1', 'L2', 'L3']) {
+      for (const p of rules.levels?.[key]?.patterns || []) {
+        total += 1;
+        if (!compileRule(p)) bad.push({ level: key, id: p.id, error: ruleErrors[ruleErrors.length - 1]?.error });
+      }
+    }
+    const okOut = { total, broken: bad.length, rules: bad };
+    console.log(JSON.stringify(okOut, null, 2));
+    process.exit(bad.length ? 3 : 0);
+  }
   let text = '';
   if (args.text != null) text = args.text;
   else if (args.file) {
@@ -196,6 +222,11 @@ function main() {
     scannedChars: text.length,
     hint: '本工具全程本地运行，不联网、不写日志。',
   };
+  if (ruleErrors.length) {
+    result.ruleErrors = ruleErrors;
+    result.hint = `⚠ 有 ${ruleErrors.length} 条规则编译失败，未参与匹配（见 ruleErrors）。此时 PASS 不代表安全。`;
+    console.error(`⚠ 规则编译失败 ${ruleErrors.length} 条：${ruleErrors.map((r) => `${r.id} (${r.error})`).join('；')}`);
+  }
 
   if (args.redact && verdict !== 'BLOCK') {
     const r = redact(text, rules);

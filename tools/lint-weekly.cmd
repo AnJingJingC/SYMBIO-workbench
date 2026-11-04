@@ -1,6 +1,6 @@
 @echo off
-rem SYMBIO è®°å¿†ä½“æ£€ â€”â€” Windows è®¡åˆ’ä»»åŠ¡å…¥å£
-rem æ³¨å†Œå‘½ä»¤ï¼ˆä¸€æ¬¡æ€§ï¼‰ï¼š
-rem   schtasks /Create /F /TN "SYMBIO è®°å¿†ä½“æ£€" /SC WEEKLY /D SUN /ST 09:00 /TR "cmd /c E:\SYMBIO\tools\lint-weekly.cmd"
+rem SYMBIO ¼ÇÒäÌå¼ì ¡ª¡ª Windows ¼Æ»®ÈÎÎñÈë¿Ú
+rem ×¢²áÃüÁî£¨Ò»´ÎĞÔ£©£º
+rem   schtasks /Create /F /TN "SYMBIO ¼ÇÒäÌå¼ì" /SC WEEKLY /D SUN /ST 09:00 /TR "cmd /c E:\SYMBIO\tools\lint-weekly.cmd"
 cd /d E:\SYMBIO
 node tools\lint-weekly.mjs

@@ -25,6 +25,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { beat, clearBeat } from './lib/heartbeat.mjs';
 
 const execFileP = promisify(execFile);
 
@@ -49,6 +50,12 @@ const BODY_CAP = 2800;          // 桥 4000 字上限 − 指令余量
 const MAX_FAILS = 3;
 
 const log = (...m) => console.log(`[autopilot ${new Date().toISOString()}]`, ...m);
+
+// 亮灯用的活动心跳。TTL 给到 240s：桥消化一张卡实测 8~25s，冷启动重试可能到 70s，
+// 面板若 90s 就判灭，会出现"明明还在跑，灯却灭了"的假象。
+const BEAT_SCENE = 'knowledge-digest';
+const BEAT_TTL = 240_000;
+const beatHere = (phase, detail) => beat({ scene: BEAT_SCENE, phase, detail, ttlMs: BEAT_TTL, rootDir: ROOT });
 
 async function ensureDirs() {
   for (const d of [INBOX, DONE, BLOCKED, FAILED, TOOLONG]) {
@@ -126,6 +133,7 @@ async function processFile(file) {
   if (path.extname(name) !== '.md' || name.startsWith('_')) return;
   log('处理', name);
   const body = await fs.readFile(file, 'utf8');
+  await beatHere('intake', `摄入 ${name}`);
 
   if (body.length > BODY_CAP) {
     log('超长，进 _too-long（桥单问上限内做不了可靠消化）');
@@ -151,6 +159,7 @@ async function processFile(file) {
   // 桥消化
   let reply;
   try {
+    await beatHere('think', `桥消化 ${name}（${SITE}）`);
     const r = await bridgeAsk(DIGEST_PROMPT(name.replace(/\.md$/, '')) + body);
     if (!r.ok) {
       throw new Error(`桥返回 ${r.status}：${r.data?.errorType ?? ''} ${r.data?.message ?? ''}`.trim());
@@ -171,6 +180,7 @@ async function processFile(file) {
   // 落卡（intake 自带字数闸/防覆盖/索引重建）
   let card;
   try {
+    await beatHere('card', `落卡 ${name}`);
     const intakePath = await toolPath('intake.mjs');
     const intake = await import(pathToFileURL(intakePath).href);
     const trimmed = reply.length > 4000 ? reply.slice(0, 4000) : reply; // intake 上限内交给它判定
@@ -211,6 +221,8 @@ async function sweep() {
   for (const f of files) {
     try { await processFile(f); } catch (e) { log('单文件异常（不中断循环）：', e.message); }
   }
+  // 一轮结束就熄灯：空转时的灯必须是灭的，否则"亮着"就没有信息量了
+  await clearBeat({ scene: BEAT_SCENE, rootDir: ROOT });
   return files.length;
 }
 

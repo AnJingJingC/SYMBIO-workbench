@@ -20,9 +20,172 @@ async function readText(root, rel, issues) {
   try {
     return await readFile(path.join(root, rel), 'utf8');
   } catch (error) {
-    issues.push({ path: rel, reason: error?.code ?? String(error?.message ?? '读取失败') });
+    // issues 传 null 表示"这个文件本来就可能不存在"（可选资产），不该污染缺项清单
+    issues?.push({ path: rel, reason: error?.code ?? String(error?.message ?? '读取失败') });
     return null;
   }
+}
+
+/** 读扁平 front matter（只认顶部的 --- ... ---），不引 yaml 依赖。 */
+function frontMatter(text) {
+  const m = String(text ?? '').match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return {};
+  const out = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (kv) out[kv[1]] = kv[2].replace(/^["']|["']$/g, '').trim();
+  }
+  return out;
+}
+
+/**
+ * 读活动心跳（亮灯的唯一数据源）。
+ * 过期即灭——不把"很久以前的活动"当成"还在干活"。
+ */
+export async function readHeartbeats(root, now = Date.now()) {
+  const dir = 'memory/10-shared/心跳';
+  let names = [];
+  try {
+    names = (await readdir(path.join(root, dir))).filter((n) => n.endsWith('.json'));
+  } catch (error) {
+    // 目录不存在 = 还没有任何活动，这是**正常状态**，不是故障（别在面板上喊"不可读"）
+    if (error?.code === 'ENOENT') return { available: true, beats: [], active: [], stale: 0 };
+    return { available: false, reason: error?.code ?? '心跳目录不可读', beats: [], active: [], stale: 0 };
+  }
+
+  const beats = [];
+  let stale = 0;
+  for (const name of names) {
+    let rec = null;
+    try {
+      rec = JSON.parse(await readFile(path.join(root, dir, name), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!rec?.scene || !rec?.at) continue;
+    const age = now - Date.parse(rec.at);
+    const ttl = Number(rec.ttlMs) > 0 ? Number(rec.ttlMs) : 90_000;
+    if (!Number.isFinite(age) || age > ttl) {
+      stale += 1;
+      continue;
+    }
+    beats.push({
+      scene: rec.scene,
+      phase: rec.phase ?? 'idle',
+      phaseLabel: rec.phaseLabel ?? rec.phase ?? '',
+      detail: rec.detail ?? '',
+      at: rec.at,
+      atLocal: rec.atLocal ?? '',
+      ttlMs: ttl,
+      ageMs: Math.max(0, age),
+      remainMs: Math.max(0, ttl - age),
+    });
+  }
+  beats.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  return { available: true, beats, active: beats.filter((b) => b.phase !== 'idle'), stale };
+}
+
+/** 共享技能层：哪些已提升、哪些已装配进 .dsh/skills。 */
+async function readSharedSkills(root) {
+  const dir = 'memory/10-shared/skills';
+  let dirs = [];
+  try {
+    dirs = (await readdir(path.join(root, dir), { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch (error) {
+    return { available: false, reason: error?.code ?? '共享技能目录不可读', count: 0, installed: 0, items: [] };
+  }
+
+  const items = [];
+  for (const name of dirs) {
+    const text = await readText(root, `${dir}/${name}/SKILL.md`, null);
+    if (!text) continue;
+    const fm = frontMatter(text);
+    const origin = await readText(root, `${dir}/${name}/ORIGIN.md`, null);
+    const from = (origin ?? '').match(/- 来源场景：\s*(.+)/)?.[1]?.trim() ?? '';
+    const installed = (await readText(root, `.dsh/skills/${name}/SKILL.md`, null)) !== null;
+    items.push({
+      name: fm.name || name,
+      desc: fm.description ?? '',
+      from,
+      installed,
+    });
+  }
+  return {
+    available: true,
+    count: items.length,
+    installed: items.filter((i) => i.installed).length,
+    items,
+  };
+}
+
+/** 零件库：按分类计数 + 已验证数。 */
+async function readParts(root) {
+  const base = 'parts';
+  const kinds = ['机制', '技能', '脚本', '待评估'];
+  let top = [];
+  try {
+    top = await readdir(path.join(root, base), { withFileTypes: true });
+  } catch (error) {
+    return { available: false, reason: error?.code ?? '零件库目录不可读', count: 0, verified: 0, byKind: {}, items: [] };
+  }
+
+  const items = [];
+  let verified = 0;
+  const byKind = {};
+  for (const kind of kinds) {
+    const kdir = path.join(root, base, kind);
+    let dirs = [];
+    try {
+      dirs = (await readdir(kdir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    } catch {
+      continue;
+    }
+    for (const name of dirs) {
+      const text = await readText(root, `${base}/${kind}/${name}/PART.md`, null);
+      if (!text) continue;
+      const fm = frontMatter(text);
+      const ok = String(fm.verified ?? '').toLowerCase() === 'true';
+      if (ok) verified += 1;
+      byKind[kind] = (byKind[kind] ?? 0) + 1;
+      let payload = 0;
+      try {
+        payload = (await readdir(path.join(kdir, name, 'payload'))).length;
+      } catch {
+        payload = 0;
+      }
+      items.push({ name: fm.name || name, kind, verified: ok, risk: fm.risk ?? '', desc: fm.desc ?? '', payload });
+    }
+  }
+  return { available: !!(top.length || items.length), count: items.length, verified, byKind, items };
+}
+
+/** 项目台账：状态分布 + 交付物计数。 */
+async function readProjects(root) {
+  const base = 'projects';
+  let dirs = [];
+  try {
+    dirs = (await readdir(path.join(root, base), { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch (error) {
+    return { available: false, reason: error?.code ?? '项目目录不可读', count: 0, byStatus: {}, items: [] };
+  }
+
+  const items = [];
+  const byStatus = {};
+  for (const dir of dirs) {
+    const text = await readText(root, `${base}/${dir}/项目卡.md`, null);
+    if (!text) continue;
+    const fm = frontMatter(text);
+    const status = fm.status ?? '—';
+    byStatus[status] = (byStatus[status] ?? 0) + 1;
+    let deliverables = 0;
+    try {
+      deliverables = (await readdir(path.join(root, base, dir, '交付'))).length;
+    } catch {
+      deliverables = 0;
+    }
+    items.push({ name: fm.name || dir, client: fm.client ?? '', status, due: fm.due ?? '', deliverables });
+  }
+  return { available: true, count: items.length, byStatus, items };
 }
 
 async function readJson(root, rel, issues) {
@@ -150,8 +313,16 @@ function todayLocal() {
  * 读取业务状态。永远 resolve，不抛异常。
  * @param {string} root E:/SYMBIO 这类业务数据根目录
  */
-// 内部 Worker：确定性落盘基础设施，不进面板「工具箱」（面板只列 6 个用户可点工具）
-const INTERNAL_TOOLS = new Set(['intake.mjs', 'bus.mjs', 'autopilot.mjs', 'lint-weekly.mjs']);
+// 内部 Worker：确定性落盘基础设施，不进面板「工具箱」（面板工具箱只列单输入框可点的工具）。
+// route / shared-skill / parts / project 都是**多参数命令**，单输入框表达不了，
+// 面板改为在「库」区块展示它们的只读摘要，操作走 CLI 或宿主 Agent 技能。
+const INTERNAL_TOOLS = new Set([
+  'intake.mjs', 'bus.mjs', 'autopilot.mjs', 'lint-weekly.mjs',
+  'shared-skill.mjs', 'parts.mjs', 'project.mjs', 'route.mjs',
+  // 维护类命令：单输入框的工具箱表达不了 --to/--write 这类选择，硬塞会变成看得见点不动。
+  // sync-publish 尤其不能做成按钮——一键往另一个仓库拷 98 个文件，不该是误点能触发的操作
+  'sync-publish.mjs',
+]);
 
 export async function readState(root) {
   const issues = [];
@@ -175,6 +346,12 @@ export async function readState(root) {
 
   const cards = await readCards(root, issues);
   const redLines = await readRedLines(root, issues);
+  const [sharedSkills, parts, projects, activity] = await Promise.all([
+    readSharedSkills(root),
+    readParts(root),
+    readProjects(root),
+    readHeartbeats(root),
+  ]);
   const layers = [];
   for (const layer of LAYERS) {
     layers.push({ ...layer, ...(await countTree(root, `memory/${layer.key}`, issues)) });
@@ -241,6 +418,15 @@ export async function readState(root) {
       : null,
     privacyDoc: redlines ? { loaded: true, chars: redlines.length, excerpt: redlines.slice(0, 360) } : { loaded: false, chars: 0, excerpt: '' },
     redLines,
+    // 新增三层「库」+ 亮灯信号。全部来自真实文件，读不到就 available:false，不填假数。
+    libraries: { sharedSkills, parts, projects },
+    activity: {
+      available: activity.available,
+      reason: activity.reason ?? null,
+      active: activity.active,
+      count: activity.beats.length,
+      stale: activity.stale,
+    },
     assets: { skills, tools },
   };
 }

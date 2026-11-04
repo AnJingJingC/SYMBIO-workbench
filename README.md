@@ -1,6 +1,6 @@
-# SYMBIO 工作台 · DSH Desktop 业务面板（v0.3.7）
+# SYMBIO 工作台 · DSH Desktop 业务面板（v0.4.0）
 
-把 `E:/SYMBIO` 的六层记忆、11 个技能、6 个工具与免费 AI 桥，挂进 `dataelement/dsh-desktop` 的一块业务面板。两个场景：**知识消化**（资料 → 可检索知识卡片）与 **深度调研**（问题 → 有证据的答案），跨场景派单走文件总线。
+把 `E:/SYMBIO` 的六层记忆、12 个技能、15 个本机工具（面板可点 6 个）、**三层库（共享技能 / 零件 / 项目台账）** 与免费 AI 桥，挂进 `dataelement/dsh-desktop` 的一块业务面板。两个场景：**知识消化**（资料 → 可检索知识卡片）与 **深度调研**（问题 → 有证据的答案），跨场景派单走文件总线 + 命令路由。
 
 - 业务面板在左 60%，**右侧对话完全复用宿主原生 UI**；顶部状态栏吸顶常驻
 - 安装：宿主 `install_local_workbench({ path: "<本包>.tgz", replace: true })`，返回 `applied` 即生效（详见 `INSTALL-PROMPT.txt`）
@@ -18,6 +18,10 @@
 | 知识卡片 | `cards/*.md` 真实扫描 | 明确「还没有第一张知识卡片」的真实空状态 + 真实下一步 |
 | 免费 AI 桥（状态灯 / 统计 / 试问一句） | `127.0.0.1:31239/health`、`/webai/ask` | 离线时禁止发送，回答原样返回 |
 | 六层记忆分布 | `memory/` 五层递归统计 | — |
+| **亮灯（活动心跳）** | `memory/10-shared/心跳/*.json`，带 TTL | 灯灭（无活动是正常状态，不报故障） |
+| **负载胶囊（CPU / 内存）** | `tools/load-gate.mjs --json`，15s 缓存 | 显示 `负载 —` + 原因，**绝不编一个"看起来正常"的数字** |
+| **共享层 · 库**（共享技能数 / 零件数 / 项目数 / 活跃场景） | `memory/10-shared/skills/`、`parts/`、`projects/`、心跳 | 目录缺失时 `available:false` + 原因 |
+| **系统拓扑 + 实时亮灯** | 静态流水线 + 心跳映射到节点 | 无活动时纯静态图 |
 | 已挂载资产 / 五条红线 | `.dsh/skills`、`tools`、`AGENTS.md`/`REDLINES.md` | 资产不可读时显示 `—（数据源不可读）` |
 | 数据源诊断 | `readState()` 的 `issues[]` | 列出每个读不到的路径与错误码 |
 
@@ -42,7 +46,9 @@
 | 方法 | 路径 | 作用 |
 |---|---|---|
 | GET | `/api/symbio/health` | 版本、身份、设计清单、五红线、数据源可达性、桥状态 |
-| GET | `/api/symbio/state` | 完整业务状态（配置/队列/卡片/记忆/交接/台账/资产/宪法/issues） |
+| GET | `/api/symbio/state` | 完整业务状态（配置/队列/卡片/记忆/交接/台账/资产/宪法/**三层库/活动心跳**/issues） |
+| GET | `/api/symbio/activity` | 亮灯：活跃场景 + 阶段 + 剩余 TTL（5s 轮询，只读几个小 JSON） |
+| GET | `/api/symbio/load` | 负载胶囊：CPU/内存/判定（复用白名单运行器，**15s 缓存**，失败不编数） |
 | GET | `/api/symbio/bridge/health` | 单独探桥 |
 | POST | `/api/symbio/bridge/login` | 把站点窗口显出来手动登录（绝不代填/不自动登录） |
 | POST | `/api/symbio/bridge/hide` | 登录完成后收回窗口，登录态保留 |
@@ -64,14 +70,17 @@ package.json          dsh.bundle.patch + dsh.client.{platform,inject} + exports
 cordis.patch.yml      插件条目；root 用 dshHomePath，dataRoot 指向 E:/SYMBIO
 dsh/index.mjs         服务端入口，Schemastery Config，注册 /api/symbio/*
 src/api.mjs           路由、桥探测、请求体兼容读取
-src/state.mjs         业务状态只读解析器（逐文件容错，issues 不编造）
-src/tools.mjs         6 个白名单工具的受限运行器
-lib/client.js         __ModuleLoader__.load + desktopWorkbenches.register，React 面板
-test/                 契约 / 解析 / 降级 / 转发 / 标识符遮蔽回归 / 无头渲染冒烟，共 21 项
+src/state.mjs         业务状态只读解析器（逐文件容错，issues 不编造；含三层库与活动心跳）
+src/tools.mjs         6 个白名单工具的受限运行器（/load 也复用它，不另开口子）
+lib/client.js         __ModuleLoader__.load + desktopWorkbenches.register，React 面板（含亮灯/负载胶囊/库区块）
+test/                 契约 / 解析 / 降级 / 转发 / 标识符遮蔽回归 / 无头渲染冒烟 / 亮灯 TTL / 负载失败态，共 28 项
 INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ```
 
-业务根 `E:/SYMBIO/tools/` 另有摄入 Worker `intake.mjs`（确定性落卡，不在包内、不计入 6 个面板工具）。
+业务根 `E:/SYMBIO/tools/` 另有 9 个**多参数 Worker**（`intake` / `bus` / `autopilot` / `lint-weekly` /
+`shared-skill` / `parts` / `project` / `route` / `sync-publish`）。它们不在面板工具箱里——单输入框表达不了
+`--skill --from --note` 这类多参数命令，硬塞进去会变成"看得见点不动"。面板改为在「共享层 · 库」区块
+展示它们的只读摘要，操作走 CLI 或宿主 Agent 技能。
 
 ## 配置
 
@@ -81,8 +90,8 @@ INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ## 校验与打包
 
 ```sh
-npm run verify     # 4 文件语法检查 + 21 项自测（全绿才可发布）
-pnpm pack          # → symbio-workbench-0.3.7.tgz
+npm run verify     # 4 文件语法检查 + 28 项自测（全绿才可发布）
+pnpm pack          # → symbio-workbench-0.4.0.tgz
 ```
 
 ## 安装
@@ -98,12 +107,13 @@ cd E:/SYMBIO/shell && npm run bridge
 
 ## 还没做的 / 诚实边界
 
-- **工具箱接入宿主 Agent**：dsh-desktop 工作台契约只给「面板 + `/api/symbio/*` 路由」，`DshClientManifest.inject` 明确「不是 Cordis 服务注入」，**没有**宿主 Agent 工具注册服务。但 11 个技能中已有 10 个通过 `node tools/*.mjs` 在对话间接触发这些工具，且本版把工具箱做成 `GET /api/symbio/tools` 机器可读清单 + `POST /api/symbio/tools/run` 可调用面（详见 `docs/工具箱-宿主Agent接入.md`）。要更严格的「Agent 原生工具」集成，需等 dsh-desktop 开放对应契约。
-- **多面板网格 / 多场景同屏**：宿主只给一块业务面板注册位（`desktopWorkbenches.register`），右侧永远是宿主原生会话，做不到。已在单面板内用响应式两列网格 + 吸顶状态栏 + 内嵌拓扑图逼近观感（见 `docs/GUI边界评估.md`）
-- 桥的登录态长期稳定性未验收（需手动登录一次后复验）
-- DeepSeek / 通义千问 / 智谱三个站点选择器为经验猜测（`verified: false`），需本机 `node probe-site.mjs <site>` 校准后才可依赖
+- **工具箱接入宿主 Agent**：dsh-desktop 工作台契约只给「面板 + `/api/symbio/*` 路由」，`DshClientManifest.inject` 明确「不是 Cordis 服务注入」，**没有**宿主 Agent 工具注册服务。但 12 个技能中已有 10 个通过 `node tools/*.mjs` 在对话间接触发这些工具，且本版把工具箱做成 `GET /api/symbio/tools` 机器可读清单 + `POST /api/symbio/tools/run` 可调用面（详见 `docs/工具箱-宿主Agent接入.md`）。要更严格的「Agent 原生工具」集成，需等 dsh-desktop 开放对应契约。
+- **多面板 / 多场景同屏 —— 上一版的说法是错的，本版更正**：宿主并非"只给一块面板"。开源 `dsh-client-ui-layout` 的 SlotMap 里，`sidebar.panellist`（list）+ `main`（keyed）就是官方多面板机制，`conversation` 只是 `main` 的一个 key。我们此前只用了 `desktopWorkbenches.register` 这个单槽封装。**但这条路径尚未真机验证**（`ctx.uiRenderer` 在 Desktop 上下文是否可达、`list id` 与 `main` key 是否必须同名，都只能靠一次小样验证回答）。详见 `memory/90-archive/evolve/2026-11-05-宿主席位-报告.md`。
+- **`rightbar` 不能用**：它已被宿主右栏占用（契约原文 "OCCUPIED by the right Sidebar"），注册会**替换**右栏而不是并排——而且不会报错。同理 `root` 明令禁止注册（会 shadow 整个 frame）。
+- 桥的登录态长期稳定性未验收（需手动登录一次后复验；cookie 存在站点分区里，重启桥不丢）
+- 四个站点（豆包 / DeepSeek / 通义千问 / 智谱）**已全部真机校准** `verified: true`。注意网页 AI 随时改版，选择器失效时用 `node probe-site.mjs <site> --input/--answer <候选>` 现场重试，不要靠改代码猜。
 
-## 分发与市场收录（v0.3.7 定案）
+## 分发与市场收录（v0.4.0 定案）
 
 本仓库（`AnJingJingC/SYMBIO-workbench`）就是这个工作台的源码与发行仓：仓库根 = 包本体（`package.json`/`dsh`/`src`/`lib`），配套 `tools`/`shell`/`docs`/`config`/`.dsh/skills` 一并公开；`memory/` 属个人数据，**不入库**。
 

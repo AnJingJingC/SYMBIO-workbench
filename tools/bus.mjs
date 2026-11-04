@@ -17,6 +17,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { beat } from './lib/heartbeat.mjs';
 
 const PLACEHOLDER = '| — | — | — | （当前无未闭环任务） | — | — |';
 const SPLIT = '## 冲突与待裁决';
@@ -134,6 +135,8 @@ async function cmdDispatch() {
     lines.push(row);
   }
   await fs.writeFile(p, lines.join('\n') + (tail ? '\n' + tail : ''), 'utf8');
+  // 派单亮灯：灯挂在**出手的一方**（from），因为"谁在派活"才是活动信号
+  await beat({ scene: from, phase: 'dispatch', detail: `派单 #${h} → ${to}`, ttlMs: 60_000, rootDir: root() });
   return { ok: true, hash: h, row, board: 'memory/10-shared/任务看板.md', message: `已派单 #${h}：${from} → ${to}。等对方回执。` };
 }
 
@@ -170,6 +173,7 @@ async function cmdReceipt() {
   const row = `| ${time} | ${h} | ${esc(from)} | ${esc(to)} | ${esc(task.replace(/#\w{8}\s*$/, ''))} | ${status}${result ? '：' + esc(result) : ''} | ${esc(artifact)} |`;
   await fs.appendFile(ledgerPath, row + '\n', 'utf8');
   const closed = receipt === 'no' || status !== 'done';
+  await beat({ scene: from, phase: closed ? 'idle' : 'receipt', detail: `回执 #${h} ${status}`, ttlMs: 60_000, rootDir: root() });
   return { ok: true, hash: h, status, closed, ledger: `memory/90-archive/任务台账-${month}.md`, message: closed ? `任务 #${h} 闭环。need_receipt=no 或非 done，任何人不得再回执。` : `已记回执 #${h}，链上还有下家（need_receipt=yes）。` };
 }
 

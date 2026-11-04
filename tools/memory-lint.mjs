@@ -139,7 +139,34 @@ function main() {
   }
   if (!results.some((r) => r.id === 'constitution')) add('PASS', 'constitution', '宪法与红线完整 ✅');
 
-  // 9) 阶段开关一致性
+  // 9) 隐私规则可编译（一条编译不过，它就不在保护你——曾有一条 L1 的 API Key 规则
+  //    写了 JS 不支持的 (?i)，静默失效很久，而体检照样报 PASS）
+  const prPath = path.join(ROOT, 'config', 'pii-rules.json');
+  if (!fs.existsSync(prPath)) {
+    add('WARN', 'pii-rules', 'config/pii-rules.json 不存在，隐私闸按保守默认处理', '从模板恢复');
+  } else {
+    try {
+      const rules = JSON.parse(fs.readFileSync(prPath, 'utf8'));
+      const bad = [];
+      let total = 0;
+      for (const key of ['L1', 'L2', 'L3']) {
+        for (const p of rules.levels?.[key]?.patterns || []) {
+          total += 1;
+          try {
+            void new RegExp(p.regex, p.flags || 'g');
+          } catch (e) {
+            bad.push(`${p.id}（${String(e.message).replace(/^.*?: /, '')}）`);
+          }
+        }
+      }
+      if (bad.length) add('FAIL', 'pii-rules', `${bad.length}/${total} 条隐私规则编译失败，等于没在跑：${bad.join('；')}`, '修 config/pii-rules.json 里的正则（JS 不支持内联 (?i)，改用 flags:"gi"）');
+      else add('PASS', 'pii-rules', `隐私规则 ${total} 条全部可编译 ✅`);
+    } catch (e) {
+      add('FAIL', 'pii-rules', `config/pii-rules.json 解析失败：${e.message}`, '修 JSON 语法');
+    }
+  }
+
+  // 10) 阶段开关一致性
   const st = cfg.stage || {};
   const mods = st.modules || {};
   const stageMap = { A: ['intake', 'pii-guard', 'memory-write', 'handoff', 'recall'], AB: ['dispatch', 'health'], ABC: ['portrait', 'part', 'evolve'] };

@@ -7,12 +7,12 @@
 import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readState } from './state.mjs';
+import { readState, readHeartbeats } from './state.mjs';
 import { listTools, runTool } from './tools.mjs';
 
 export const API_PREFIX = '/api/symbio';
 export const DEFAULT_DATA_ROOT = 'E:/SYMBIO';
-export const VERSION = '0.3.7';
+export const VERSION = '0.4.0';
 
 // 「设计清单」：只用来核对资产是否齐全，不代表当前读到的实时状态。
 // 面板上的实时数量一律取 /state 的 assets；数据源不可读时显示「—」并说明原因。
@@ -98,6 +98,11 @@ export function createApiRoutes({ bridgeUrl, dataRoot } = {}) {
   const base = String(bridgeUrl || 'http://127.0.0.1:31239').replace(/\/+$/, '');
   const root = String(dataRoot || DEFAULT_DATA_ROOT);
 
+  // 负载胶囊缓存：load-gate 采样 3 次 × 1.5s ≈ 4.5s，不能让面板每次轮询都跑一遍。
+  // 15s 足够"接近实时"，又不会把宿主进程卡住。
+  const LOAD_TTL_MS = 15_000;
+  let loadCache = { at: 0, value: null };
+
   return [
     {
       path: `${API_PREFIX}/health`,
@@ -132,6 +137,80 @@ export function createApiRoutes({ bridgeUrl, dataRoot } = {}) {
           expectedAssets: EXPECTED_ASSETS,
           state,
         });
+      },
+    },
+    {
+      // 亮灯：谁被唤醒、谁在思考、谁在落卡。轮询接口，故意做得很轻（只读几个小 JSON）。
+      path: `${API_PREFIX}/activity`,
+      methods: ['GET'],
+      requestBody: 'buffered',
+      async fetch() {
+        const activity = await readHeartbeats(root);
+        return json({
+          ok: true,
+          available: activity.available,
+          reason: activity.reason ?? null,
+          active: activity.active ?? [],
+          total: activity.beats?.length ?? 0,
+          stale: activity.stale ?? 0,
+          checkedAt: new Date().toISOString(),
+        });
+      },
+    },
+    {
+      // 负载胶囊：CPU/内存条的数据源。
+      // 复用 tools/run 的严格白名单执行器（execFile 无 shell、60s 超时、输出裁剪），
+      // 不在这里另开一条"任意命令"的口子。带 15s 缓存，采样成本不落到每次轮询上。
+      path: `${API_PREFIX}/load`,
+      methods: ['GET'],
+      requestBody: 'buffered',
+      async fetch() {
+        const now = Date.now();
+        if (loadCache.value && now - loadCache.at < LOAD_TTL_MS) {
+          return json({ ...loadCache.value, cached: true, ageMs: now - loadCache.at });
+        }
+
+        const run = await runTool('load-gate', root, { json: true });
+        if (!run.ok) {
+          return json({ ok: false, errorType: run.errorType ?? 'run-failed', message: run.message ?? '负载闸不可用' }, 200);
+        }
+
+        let parsed = null;
+        try {
+          parsed = JSON.parse(String(run.stdout ?? '').trim().split('\n').pop());
+        } catch {
+          parsed = null;
+        }
+        if (!parsed) {
+          // 采样失败就说失败，绝不编一个"看起来正常"的假数字
+          return json({
+            ok: false,
+            errorType: 'parse-failed',
+            message: '负载闸没有返回可解析的 JSON',
+            exitCode: run.exitCode,
+            stderr: String(run.stderr ?? '').slice(0, 300),
+          });
+        }
+
+        const value = {
+          ok: true,
+          cpu: parsed.cpu ?? null,
+          ram: parsed.ram ?? null,
+          samples: parsed.samples ?? [],
+          verdict: parsed.verdict ?? null,
+          exitCode: run.exitCode,
+          minOk: parsed.minOk ?? 90,
+          minWarn: parsed.minWarn ?? 95,
+          cores: parsed.cores ?? null,
+          ramUsedMB: parsed.ramUsedMB ?? null,
+          ramTotalMB: parsed.ramTotalMB ?? null,
+          top: Array.isArray(parsed.topMem) ? parsed.topMem.slice(0, 3) : (parsed.top ?? []).slice(0, 3),
+          time: parsed.time ?? null,
+          cached: false,
+          ageMs: 0,
+        };
+        loadCache = { at: Date.now(), value };
+        return json(value);
       },
     },
     {
