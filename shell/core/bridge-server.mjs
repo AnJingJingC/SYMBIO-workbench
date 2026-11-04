@@ -68,9 +68,23 @@ export async function startBridge({ dispatcher, port = 31239 }) {
     }
 
     if (req.method !== 'POST' || url.pathname !== '/webai/ask') {
+      // 选择器实测：POST /webai/probe?site=xxx —— verified:false 的站点靠它校准
+      if (req.method === 'POST' && url.pathname === '/webai/probe') {
+        const siteId = url.searchParams.get('site');
+        if (!siteId) {
+          return send(res, 400, { ok: false, errorType: 'bad-request', message: '缺少 ?site=xxx' });
+        }
+        try {
+          const result = await dispatcher.probeSite(siteId, { captureTo: url.searchParams.get('capture') || undefined });
+          const { status, ...body } = result;
+          return send(res, status ?? (result.ok ? 200 : 500), body);
+        } catch (e) {
+          return send(res, 500, { ok: false, errorType: 'unknown', message: e?.message ?? '探测失败' });
+        }
+      }
       return send(res, 404, {
         ok: false, errorType: 'bad-request',
-        message: '未知路径。可用：GET /health、POST /webai/ask、POST /webai/show、POST /webai/hide。',
+        message: '未知路径。可用：GET /health、POST /webai/ask、POST /webai/show、POST /webai/hide、POST /webai/probe。',
       });
     }
 

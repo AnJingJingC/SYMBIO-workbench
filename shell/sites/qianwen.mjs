@@ -1,7 +1,7 @@
 // 站点薄壳：通义千问（tongyi.aliyun.com）
 //
 // ⚠️ 校准状态（2026-11-04）：**未校准**。verified=false，同 deepseek 的诚实边界。
-// 校准流程：npm run bridge → /webai/show?site=qianwen 手动登录 → node test-site.mjs qianwen
+// 校准流程：npm run bridge → /webai/show?site=qianwen 手动登录 → node probe-site.mjs qianwen
 //
 // 已知结构线索（待实测）：
 //   - 输入：通义千问网页版用 <textarea>（placeholder 类似"千问，你好"）
@@ -15,7 +15,7 @@ const SITE = {
   partitionKey: 'webai-qianwen',
   verified: false,
   verifiedFields: { inputSel: false, send: false, answerSel: false },
-  verifiedNote: '未校准：选择器为合理猜测，真机 npm run test-site 校准前不得用于真实问答',
+  verifiedNote: '未校准：选择器为合理猜测，真机 node probe-site.mjs 校准前不得用于真实问答',
 
   inputSel: 'textarea[placeholder*="千问"], textarea#chat-input, div[contenteditable="true"]',
   sendSel: '',

@@ -7,7 +7,7 @@
 // 校准流程（与 doubao 同一套，别跳步）：
 //   1. 启动桥：cd E:/SYMBIO/shell && npm run bridge
 //   2. 开登录窗手动登录：curl -X POST "http://127.0.0.1:31239/webai/show?site=deepseek"
-//   3. 校准选择器：node test-site.mjs deepseek   （把实测结果回写进本文件，verified 才能改 true）
+//   3. 校准选择器：node probe-site.mjs deepseek   （把实测结果回写进本文件，verified 才能改 true）
 //
 // 已知结构线索（仅凭公开页面记忆，待实测推翻或确认）：
 //   - 输入：DeepSeek 网页版长期用 <textarea id="chat-input">；新版可能换 ProseMirror
@@ -21,7 +21,7 @@ const SITE = {
   partitionKey: 'webai-deepseek',
   verified: false,
   verifiedFields: { inputSel: false, send: false, answerSel: false },
-  verifiedNote: '未校准：选择器为合理猜测，真机 npm run test-site 校准前不得用于真实问答',
+  verifiedNote: '未校准：选择器为合理猜测，真机 node probe-site.mjs 校准前不得用于真实问答',
 
   inputSel: 'textarea#chat-input, div[contenteditable="true"].ProseMirror',
   sendSel: '', // 未实测；先走回车（多数站点回车可发送）

@@ -1,7 +1,7 @@
 // 站点薄壳：智谱清言（chatglm.cn）
 //
 // ⚠️ 校准状态（2026-11-04）：**未校准**。verified=false，同 deepseek 的诚实边界。
-// 校准流程：npm run bridge → /webai/show?site=zhipu 手动登录 → node test-site.mjs zhipu
+// 校准流程：npm run bridge → /webai/show?site=zhipu 手动登录 → node probe-site.mjs zhipu
 //
 // 已知结构线索（待实测）：
 //   - 输入：清言网页版用 <textarea>（chat-input 类）
@@ -14,7 +14,7 @@ const SITE = {
   partitionKey: 'webai-zhipu',
   verified: false,
   verifiedFields: { inputSel: false, send: false, answerSel: false },
-  verifiedNote: '未校准：选择器为合理猜测，真机 npm run test-site 校准前不得用于真实问答',
+  verifiedNote: '未校准：选择器为合理猜测，真机 node probe-site.mjs 校准前不得用于真实问答',
 
   inputSel: 'textarea#chat-input, textarea.chat-input, div[contenteditable="true"]',
   sendSel: '',
