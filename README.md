@@ -67,7 +67,7 @@ src/api.mjs           路由、桥探测、请求体兼容读取
 src/state.mjs         业务状态只读解析器（逐文件容错，issues 不编造）
 src/tools.mjs         6 个白名单工具的受限运行器
 lib/client.js         __ModuleLoader__.load + desktopWorkbenches.register，React 面板
-test/                 契约 / 解析 / 降级 / 转发 19 项自测
+test/                 契约 / 解析 / 降级 / 转发 / 标识符遮蔽回归 / 无头渲染冒烟，共 21 项
 INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ```
 
@@ -81,8 +81,8 @@ INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ## 校验与打包
 
 ```sh
-npm run verify     # 4 文件语法检查 + 19 项自测
-pnpm pack          # → symbio-workbench-0.3.2.tgz
+npm run verify     # 4 文件语法检查 + 21 项自测（全绿才可发布）
+pnpm pack          # → symbio-workbench-0.3.7.tgz
 ```
 
 ## 安装
@@ -98,7 +98,7 @@ cd E:/SYMBIO/shell && npm run bridge
 
 ## 还没做的 / 诚实边界
 
-- **工具箱接入宿主 Agent**：dsh-desktop 工作台契约只给「面板 + `/api/symbio/*` 路由」，`DshClientManifest.inject` 明确「不是 Cordis 服务注入」，**没有**宿主 Agent 工具注册服务。但 10 个技能已 `node tools/*.mjs` 在对话间接触发这些工具，且本版把工具箱做成 `GET /api/symbio/tools` 机器可读清单 + `POST /api/symbio/tools/run` 可调用面（详见 `docs/工具箱-宿主Agent接入.md`）。要更严格的「Agent 原生工具」集成，需等 dsh-desktop 开放对应契约。
+- **工具箱接入宿主 Agent**：dsh-desktop 工作台契约只给「面板 + `/api/symbio/*` 路由」，`DshClientManifest.inject` 明确「不是 Cordis 服务注入」，**没有**宿主 Agent 工具注册服务。但 11 个技能中已有 10 个通过 `node tools/*.mjs` 在对话间接触发这些工具，且本版把工具箱做成 `GET /api/symbio/tools` 机器可读清单 + `POST /api/symbio/tools/run` 可调用面（详见 `docs/工具箱-宿主Agent接入.md`）。要更严格的「Agent 原生工具」集成，需等 dsh-desktop 开放对应契约。
 - **多面板网格 / 多场景同屏**：宿主只给一块业务面板注册位（`desktopWorkbenches.register`），右侧永远是宿主原生会话，做不到。已在单面板内用响应式两列网格 + 吸顶状态栏 + 内嵌拓扑图逼近观感（见 `docs/GUI边界评估.md`）
 - 桥的登录态长期稳定性未验收（需手动登录一次后复验）
 - DeepSeek / 通义千问 / 智谱三个站点选择器为经验猜测（`verified: false`），需本机 `node probe-site.mjs <site>` 校准后才可依赖
@@ -116,6 +116,8 @@ cd E:/SYMBIO/shell && npm run bridge
 
 > **mydsh.xyz 的真实规则**（已核实其站点源码与 `trust` 页）：它是**纯索引站，不托管任何文件**，所有条目指向 GitHub 原仓库；「＋上传」通道当前关闭（`UPLOAD_OPEN = false`）。因此**上架 = 申请收录**，操作是在 `mashanglinyu/luanyujia-workbench` 的 Issues 里提交仓库地址与简介，核实后 48 小时内处理。安装包（`.tgz`）不入库、不上传，由本机 `pnpm pack` 产出。
 
-提交流程：`pnpm pack` → 在 mydsh.xyz 工作台市场上传 `symbio-workbench-0.3.3.tgz` → 填仓库 URL 与展示信息 → 发布。本地升级仍走 `install_local_workbench({ path, replace })`。
+**收录状态**：本仓库已通过 [Issue #2](https://github.com/mashanglinyu/luanyujia-workbench/issues/2) 申请收录（2026-11-04 提交，承诺 48 小时内处理）。收录后索引条目指向本仓库本身；仓库说明有变更时再开 Issue 提出更正即可。
+
+本机安装 / 升级流程：`pnpm pack` 产出 `.tgz` → 宿主 `install_local_workbench({ path, replace: true })`，返回 `application === 'applied'` 才算生效。**安装包不随仓库分发**，请从本仓库源码自行 `pnpm pack` 产出——这样你装的就是当前源码，不会拿到被改动或已过期的包。
 
 MIT
