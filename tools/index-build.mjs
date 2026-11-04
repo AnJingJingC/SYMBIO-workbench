@@ -30,35 +30,47 @@ function firstHeading(text) {
 
 const META_PREFIX = /^[-*]\s*(来源|摄入时间|密级|主题标签|更新时间|状态)[：:]/;
 
-function firstSentence(text) {
-  const plain = text.replace(/^---[\s\S]*?---/, '');
+// 小节名（可能带 # 或 ** 包裹）：不是正文，取摘要时必须跳过
+const SECTION_NAMES = /^(一句话结论|要点|值得记的原文片段|原文片段|标签|结论|摘要|要点提炼)$/;
+const stripMarks = (l) => l.replace(/^[#*\s]+|[*\s]+$/g, '').replace(/[：:]$/, '');
 
-  // 优先取「一句话结论」小节下的第一句
-  const sec = plain.match(/^##\s*一句话结论\s*$([\s\S]*?)(?=^##\s|^#\s|$(?![\s\S]))/m);
-  if (sec) {
-    const line = sec[1]
-      .split('\n')
-      .map((l) => l.trim())
-      .find((l) => l && !l.startsWith('<!--') && !l.startsWith('>') && !l.startsWith('```'));
-    if (line) return clean(line);
+/**
+ * 抽「一句话」。
+ * 2026-11-04 真机踩坑：卡片由外部模型生成，小节标题是**纯文本**「一句话结论」而不是
+ * `## 一句话结论`，旧正则匹配不到 → 退化取"正文第一行"，而正文第一行恰好是重复的标题，
+ * 于是索引里每条的"一句话"都等于标题，信息量归零。
+ */
+function firstSentence(text, title = '') {
+  const plain = text.replace(/^---[\s\S]*?---/, '');
+  const lines = plain.split('\n').map((l) => l.trim());
+  const titleFlat = clean(title);
+
+  const isNoise = (l) =>
+    !l ||
+    l.startsWith('#') ||
+    l.startsWith('|') ||
+    l.startsWith('>') ||
+    l.startsWith('```') ||
+    l.startsWith('<!--') ||
+    META_PREFIX.test(l) ||
+    SECTION_NAMES.test(stripMarks(l));
+
+  // 1) 优先：标记行「一句话结论」之后的第一段有效文本（兼容 ## / ** / 纯行三种写法）
+  const idx = lines.findIndex((l) => stripMarks(l) === '一句话结论');
+  if (idx >= 0) {
+    for (let i = idx + 1; i < lines.length; i++) {
+      if (SECTION_NAMES.test(stripMarks(lines[i]))) break; // 进入下一小节，停止
+      if (isNoise(lines[i])) continue;
+      const c = clean(lines[i]);
+      if (c.length >= 8 && c !== titleFlat) return c;
+    }
   }
 
-  const body = plain
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(
-      (l) =>
-        l &&
-        !l.startsWith('#') &&
-        !l.startsWith('|') &&
-        !l.startsWith('>') &&
-        !l.startsWith('```') &&
-        !l.startsWith('<!--') &&
-        !META_PREFIX.test(l)
-    );
-  for (const line of body) {
-    const c = clean(line.replace(/^[-*]\s*/, ''));
-    if (c.length >= 8) return c;
+  // 2) 退化：第一段有效、且不与标题重复的正文
+  for (const l of lines) {
+    if (isNoise(l)) continue;
+    const c = clean(l.replace(/^[-*]\s*/, ''));
+    if (c.length >= 8 && c !== titleFlat) return c;
   }
   return '（无摘要）';
 }
@@ -100,7 +112,7 @@ function main() {
     const full = path.join(dir, f);
     const text = fs.readFileSync(full, 'utf8');
     const title = firstHeading(text) || f.replace(/\.md$/, '');
-    const one = firstSentence(text);
+    const one = firstSentence(text, title);
     const tg = tags(text) || '—';
     const d = dateOf(f, fs.statSync(full).mtime.toISOString().slice(0, 10));
     rows.push({ f, title, one, tg, d });

@@ -6,12 +6,16 @@ import { startBridge } from './core/bridge-server.mjs';
 import { createMockDriver } from './drivers/mock.mjs';
 import DOUBAO from './sites/doubao.mjs';
 
-const clone = (id) => ({ ...DOUBAO, id, partitionKey: `webai-${id}`, name: `测试站-${id}`, verified: false });
+// 测试站是 dispatcher 状态机的夹具，不该继承豆包的「思考占位」判据（那是站点级知识）。
+// 占位行为由单独的 t-placeholder 用例显式覆盖，避免夹具文本恰好命中判据造成假失败。
+const clone = (id) => ({ ...DOUBAO, id, partitionKey: `webai-${id}`, name: `测试站-${id}`, verified: false, isPendingAnswer: undefined });
 
 const sites = {};
-for (const id of ['t-happy', 't-nologin', 't-stale', 't-silent', 't-nofirst', 't-heal', 't-slow']) {
+for (const id of ['t-happy', 't-nologin', 't-stale', 't-silent', 't-nofirst', 't-heal', 't-slow', 't-placeholder']) {
   sites[id] = clone(id);
 }
+// 只有这个站显式挂回豆包的占位判据，用来验证「占位不算答案」这条路径
+sites['t-placeholder'] = { ...sites['t-placeholder'], isPendingAnswer: DOUBAO.isPendingAnswer };
 
 let healCount = 0;
 const plan = {
@@ -22,6 +26,8 @@ const plan = {
   't-nofirst': { noFirstToken: true },
   't-heal': () => ({ answer: '重建后成功', crashOnWait: healCount++ === 0 }),
   't-slow': { delayMs: 120, answer: '慢答' },
+  // 2026-11-04 真机事故：占位语被当成答案返回 → 桥必须如实报 answer-pending
+  't-placeholder': { answer: '正在思考' },
 };
 
 const rows = [];
@@ -114,6 +120,15 @@ try {
     heal.status === 200 && heal.json.ok === true && heal.json.text === '重建后成功',
     `status=${heal.status} text=${JSON.stringify(heal.json.text)}`,
   );
+
+  // 8b. 思考占位不算答案（2026-11-04 真机事故回归）：必须 502 answer-pending，不许 ok:true
+  const ph = await post({ site: 't-placeholder', question: '占位测试' });
+  check(
+    '思考占位 → 502 answer-pending（不把占位当答案）',
+    ph.status === 502 && ph.json.errorType === 'answer-pending',
+    `status=${ph.status} type=${ph.json.errorType} text=${JSON.stringify(ph.json.text)}`,
+  );
+  check('思考占位：不返回任何 text 字段', ph.json.text === undefined, JSON.stringify(ph.json.text));
 
   // 9. 同站串行：并发两问，峰值并发必须是 1（防串话）
   const before = dispatcher.stats().asked;

@@ -59,5 +59,31 @@ check('clean 对正常答案不改动', DOUBAO.clean(NORMAL) === NORMAL, JSON.st
 const SHORT = '收到';
 check('clean 对极短答案不改动', DOUBAO.clean(SHORT) === SHORT, JSON.stringify(DOUBAO.clean(SHORT)));
 
+// --- 4. 思考占位不算答案（2026-11-04 真机事故回归） ---
+// 事故：登录后首次提问，回答区先出现「正在思考」，1500ms 不变 → 桥返回 ok:true/chars:4，
+//       无人循环据此落了一张只有两行占位语的知识卡片。以下断言把它钉死。
+check('站点提供 isPendingAnswer 钩子', typeof DOUBAO.isPendingAnswer === 'function');
+check('「正在思考」判为未完成', DOUBAO.isPendingAnswer('正在思考') === true, '正在思考');
+check('「规划知识卡片结构」判为未完成（事故原文 1）', DOUBAO.isPendingAnswer('规划知识卡片结构') === true);
+check('「提炼消息队列核心表述」判为未完成（事故原文 2，前缀黑名单挡不住）', DOUBAO.isPendingAnswer('提炼消息队列核心表述') === true);
+check('「深度思考中」判为未完成', DOUBAO.isPendingAnswer('深度思考中') === true);
+check('「搜索中」判为未完成', DOUBAO.isPendingAnswer('搜索中') === true);
+check('空文本不判为思考占位（归 empty-answer 管，勿抢归因）', DOUBAO.isPendingAnswer('') === false);
+// 反向：不许误杀真实答案
+check('正常长答案不判为未完成', DOUBAO.isPendingAnswer(CLEANED) === false);
+check('真·短答案「收到」不判为未完成（白名单）', DOUBAO.isPendingAnswer('收到') === false);
+check('真·短答案「是」不判为未完成（白名单）', DOUBAO.isPendingAnswer('是') === false);
+check('正常答案（含换行与标点）不判为未完成', DOUBAO.isPendingAnswer('可以先从定义开始。\n然后再谈取舍。') === false);
+// 配置防回退：stableMs 曾被 1500 误判，不许改回去
+check('stableMs 不低于 2000ms（防止句子间歇误判收敛）', DOUBAO.wait.stableMs >= 2000, String(DOUBAO.wait.stableMs));
+check('softTimeoutMs 已配置（占位语的等待上限）', typeof DOUBAO.wait.softTimeoutMs === 'number' && DOUBAO.wait.softTimeoutMs >= 30000, String(DOUBAO.wait.softTimeoutMs));
+
+// --- 5. clean 去掉思考过程标题（2026-11-04 真机：正文首行混进「已完成思考」） ---
+const WITH_THINKING = ['已完成思考', '消息队列是生产者与消费者之间的异步通信中间件。'].join('\n');
+check('clean 去掉「已完成思考」标题行', !DOUBAO.clean(WITH_THINKING).includes('已完成思考'), DOUBAO.clean(WITH_THINKING));
+check('clean 去掉思考标题后正文保留', DOUBAO.clean(WITH_THINKING).startsWith('消息队列是生产者与消费者'), DOUBAO.clean(WITH_THINKING));
+const DEEP = ['已深度思考（用时 12 秒）', '结论：先做最小闭环，再谈扩展。'].join('\n');
+check('clean 去掉「已深度思考（用时 N 秒）」', !DOUBAO.clean(DEEP).includes('深度思考'), DOUBAO.clean(DEEP));
+
 console.log(`\n通过 ${pass} / 失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

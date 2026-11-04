@@ -130,7 +130,7 @@ export function createElectronDriver({ loadTimeoutMs = 60000, showPages = false,
        * 等"新出现的回答"：先记着发送前有几条，等到条数变多、且最后一条文本稳定。
        * 这是修掉假阳性的关键——旧实现取"最后一个匹配节点"，会把用户自己的问句当回答交回去。
        */
-      async waitForNew(sel, { minCount = 1, firstTokenMs = 25000, stableMs = 1500, hardTimeoutMs = 180000 } = {}) {
+      async waitForNew(sel, { minCount = 1, firstTokenMs = 25000, stableMs = 1500, hardTimeoutMs = 180000, isPending, softTimeoutMs = 60000 } = {}) {
         const t0 = Date.now();
         // 阶段一：条数必须先变多（区分"没发出去"和"回答太慢"）
         let appeared = false;
@@ -156,6 +156,14 @@ export function createElectronDriver({ loadTimeoutMs = 60000, showPages = false,
             last = cand;
             lastChange = Date.now();
           } else if (last && Date.now() - lastChange >= stableMs) {
+            // 站点说"这只是思考中的占位"（如豆包的「正在思考」「提炼消息队列核心表述」），
+            // 那它就不是答案：续命继续等正文，绝不把占位语当回答交回去。
+            // 但软超时一到就得放手（宁可交回可诊断的短文本，也不能把页面挂死）。
+            if (typeof isPending === 'function' && isPending(last) && Date.now() - t0 < softTimeoutMs) {
+              lastChange = Date.now();
+              await sleep(300);
+              continue;
+            }
             return last;
           }
           await sleep(300);

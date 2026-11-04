@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import os from 'node:os'
@@ -325,7 +325,13 @@ test('真机数据源（若存在）：关键不变量仍成立', async () => {
   assert.ok(s.assets.skills.length >= 11, '技能 ≥11（含 symbio-rollback）')
   assert.equal(s.assets.tools.length, 6)
   assert.equal(s.queue.tasks.length, 0, '看板当前应无未闭环任务')
-  assert.equal(s.cards.total, 0, '卡片目录当前应为空')
+  // 卡片数不设固定值：用户真的落了卡之后，硬编码 0 会让测试永久失败（2026-11-04 已踩）。
+  // 断言改为「数据源真实」——total 必须等于卡片目录里的实际卡片数（不含索引），不许编造。
+  const cardsDir = 'E:/SYMBIO/memory/20-scenes/knowledge-digest/cards'
+  const cardsOnDisk = existsSync(cardsDir)
+    ? readdirSync(cardsDir).filter((f) => f.endsWith('.md') && f !== '索引.md').length
+    : 0
+  assert.equal(s.cards.total, cardsOnDisk, '卡片数应与卡片目录实际文件数一致（数据源不得编造）')
   assert.ok(s.memory.totalFiles >= 22, '记忆文件 ≥22（含 deep-research 场景五件套）')
 })
 

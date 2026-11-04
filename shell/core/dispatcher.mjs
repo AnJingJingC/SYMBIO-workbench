@@ -12,6 +12,8 @@ const STATUS_OF = {
   'secret-blocked': 422,
   'unknown-site': 404,
   'empty-answer': 502,
+  // 502 而非 500：上游确实连通了，只是只回了思考占位，属于"上游响应不可用"
+  'answer-pending': 502,
   'guest-dead': 503,
   'timeout': 504,
   'selector-stale': 500,
@@ -89,7 +91,19 @@ export function createDispatcher({ sites, driver, log = () => {} }) {
     const loggedIn = await site.loggedIn(page).catch(() => true);
     if (!loggedIn) log({ level: 'warn', msg: '未登录，仍尝试（该站可能允许匿名试用）', site: site.id });
 
-    const focused = await page.focus(site.inputSel);
+    let focused = await page.focus(site.inputSel);
+    if (!focused) {
+      // 冷启动容错（2026-11-04 真机实测）：桥刚拉起时 SPA 还没把输入框挂出来，
+      // 第一次 ask 必然 selector-stale，第二次就好了——这对用户就是"第一问总是失败"。
+      // 此刻一个字都还没输入，重试绝不会串话，所以这里可以安全地重试。
+      for (let i = 0; i < 5 && !focused; i += 1) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (typeof page.waitHydrated === 'function') {
+          await page.waitHydrated({ timeoutMs: 4000, selector: site.inputSel }).catch(() => null);
+        }
+        focused = await page.focus(site.inputSel);
+      }
+    }
     if (!focused) {
       // 此刻一个字都还没输入，重试绝对不会串话 → 标记为可安全重试。
       // 反之，focus 之后（type/click/wait）的失败一律不自动重试，避免把同一个问题发出去两次。
@@ -116,6 +130,8 @@ export function createDispatcher({ sites, driver, log = () => {} }) {
           firstTokenMs: site.wait.firstTokenMs,
           stableMs: site.wait.stableMs,
           hardTimeoutMs: site.wait.hardTimeoutMs,
+          isPending: typeof site.isPendingAnswer === 'function' ? site.isPendingAnswer : undefined,
+          softTimeoutMs: site.wait.softTimeoutMs ?? 60000,
         });
       } else {
         await page.waitFor(site.answerSel, site.wait.firstTokenMs);
@@ -137,6 +153,15 @@ export function createDispatcher({ sites, driver, log = () => {} }) {
       } catch {
         /* 清洗失败保留原文，绝不吞内容 */
       }
+    }
+    // 硬兜底：连软超时（默认 60s）都过了还只是思考占位 —— 案例：豆包一直显示
+    // 「正在思考」「提炼消息队列核心表述」。宁可如实报错，也不能把占位语当答案交回去污染下游。
+    if (typeof site.isPendingAnswer === 'function' && site.isPendingAnswer(text)) {
+      throw tagged(
+        'answer-pending',
+        `回答区只有思考占位（「${text.slice(0, 40)}」），已等过软超时 ${site.wait.softTimeoutMs ?? 60000}ms 仍未见正文。已如实报错，未把占位当答案。`,
+        { retryable: true, stage: 'answer' },
+      );
     }
     if (!text) throw tagged('empty-answer', '回答区域已出现但内容为空，如实报错，不编造。');
     if (text.length > MAX_ANSWER_CHARS) text = text.slice(0, MAX_ANSWER_CHARS);

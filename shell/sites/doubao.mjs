@@ -40,7 +40,17 @@ const SITE = {
     const lines = String(text ?? '')
       .split(/\r?\n/)
       .map((l) => l.trim());
-    const dropLine = [/^下载豆包电脑版.*$/, /^立即下载.*$/, /^解锁本地任务.*$/, /^可在本地电脑协助.*$/, /^搜索\s*\d+\s*个关键词.*$/];
+    const dropLine = [
+      /^下载豆包电脑版.*$/,
+      /^立即下载.*$/,
+      /^解锁本地任务.*$/,
+      /^可在本地电脑协助.*$/,
+      /^搜索\s*\d+\s*个关键词.*$/,
+      // 思考过程折叠标题：2026-11-04 实测回答正文首行会混进「已完成思考」
+      // （深度思考模式下还会带「已深度思考（用时 12 秒）」），都不是答案正文。
+      /^已完成思考$/,
+      /^已深度思考.*$/,
+    ];
     const cutFrom = /^(相关视频|相关推荐|相关阅读|参考资料|参考视频|延伸阅读)$/;
     const out = [];
     for (const l of lines) {
@@ -71,8 +81,30 @@ const SITE = {
     return page.key('Enter');
   },
 
+  // 思考态占位：**真实事故 2026-11-04** —— 登录后提问，回答区先后出现
+  // 「正在思考」「规划知识卡片结构」「提炼消息队列核心表述」，这些文本长时间不变，
+  // 桥按"已收敛"返回 ok:true，无人循环据此落了只有两行占位语的知识卡片。
+  //
+  // 教训：**不能靠动词前缀列黑名单**——占位语是模型自由生成的动宾短语，列举不完。
+  // 改用结构性判据：真实回答一定有句末标点、冒号或换行；占位摘要是一句无标点的短短语。
+  // 宁可多等（softTimeout 兜底），也不把占位当答案。
+  isPendingAnswer(text) {
+    const t = String(text ?? '').trim();
+    if (!t) return false; // 空文本归 empty-answer 管，不抢归因
+    const flat = t.replace(/\s+/g, '');
+    if (/^(正在|思考中|深度思考|搜索中|生成中|加载中|请稍等)/.test(flat)) return true;
+    // 真·短答案白名单：用户问是/否或确认类问题时，答案本来就没有标点，不许被拖 60 秒
+    if (/^(是|否|对|不对|可以|不可以|不行|好的|好|收到|明白|ok|OK|yes|no)$/.test(flat)) return false;
+    if (flat.length > 16) return false;
+    // 短句且完全没有标点/换行 → 高概率是"思考摘要"，不是答案
+    if (!/[。！？!?；;：:，,、\n]/.test(t)) return true;
+    return false;
+  },
+
   // 等待参数：首帧可以慢，收敛要等住，硬超时兜底
-  wait: { firstTokenMs: 25000, stableMs: 1500, hardTimeoutMs: 180000 },
+  // stableMs 1500 → 2500：豆包流式输出有停顿，1.5s 太容易在句子间歇误判收敛。
+  // softTimeoutMs：占位语最多拖这么久，超过就交给 dispatcher 如实报 answer-pending。
+  wait: { firstTokenMs: 25000, stableMs: 2500, softTimeoutMs: 60000, hardTimeoutMs: 180000 },
 
   profileDir: null, // null = 用 Electron 默认 userData 下的持久分区
 };
