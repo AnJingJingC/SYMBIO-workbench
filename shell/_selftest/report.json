@@ -1,0 +1,663 @@
+{
+  "kind": "symbio-shell-selftest",
+  "startedAt": "2026-11-04T04:32:26.728Z",
+  "electron": "45.2.2",
+  "chrome": "156.0.8078.80",
+  "node": "24.22.2",
+  "platform": "win32 x64",
+  "steps": [
+    {
+      "name": "站点薄壳加载",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "sites": [
+          "doubao"
+        ],
+        "problems": []
+      }
+    },
+    {
+      "name": "桥服务启动",
+      "ok": true,
+      "warn": false,
+      "detail": "http://127.0.0.1:31249"
+    },
+    {
+      "name": "主窗口截图已生成",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "file": "E:\\SYMBIO\\shell\\_selftest\\main-window.png",
+        "bytes": 44026
+      }
+    },
+    {
+      "name": "preload 契约真运行时可用",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "groups": {
+          "file": [
+            "list",
+            "read"
+          ],
+          "session": [
+            "current",
+            "rotate"
+          ],
+          "tabs": [
+            "getOrder",
+            "setOrder"
+          ],
+          "scenario": [
+            "list",
+            "get"
+          ],
+          "config": [
+            "stage"
+          ],
+          "bridge": [
+            "sites",
+            "health",
+            "ask",
+            "login",
+            "hide",
+            "probe"
+          ],
+          "window": [
+            "minimize",
+            "close"
+          ]
+        },
+        "hasRequire": "undefined",
+        "hasProcess": "undefined"
+      }
+    },
+    {
+      "name": "界面有真实内容（非白屏）",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "chars": 340,
+        "head": "SYMBIO Shell\n阶段 A · 6 模块开\n会话 sess-selftest-1\n桥 http://127.0.0.1:31249\n切换会话\n✕\n知识消"
+      }
+    },
+    {
+      "name": "阶段与场景从真配置读到",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "stage": "A",
+        "scenesLine": "场景 知识消化",
+        "rendererErr": null
+      }
+    },
+    {
+      "name": "桥 GET /health",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "status": 200,
+        "sites": [
+          "doubao"
+        ]
+      }
+    },
+    {
+      "name": "桥错误分流：未注册站 → 404",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "status": 404,
+        "body": {
+          "ok": false,
+          "errorType": "unknown-site",
+          "message": "未注册的站点：__nope__（可选：doubao）"
+        }
+      }
+    },
+    {
+      "name": "桥机密闸：L1 → 422 且不回显明文",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "status": 422,
+        "body": {
+          "ok": false,
+          "errorType": "secret-blocked",
+          "message": "检测到疑似机密内容（id-card），已按红线拦截，未发往网页端。请删掉该段后重试。"
+        }
+      }
+    },
+    {
+      "name": "真实站点可驱动 + DOM 已探测",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "url": "https://www.doubao.com/chat/",
+        "title": "豆包 - 字节跳动旗下 AI 智能助手",
+        "loggedIn": false,
+        "hydration": {
+          "hydrated": true,
+          "bodyLen": 70,
+          "elements": 149,
+          "hit": true,
+          "waitedMs": 1067,
+          "bySelector": true
+        },
+        "domStats": {
+          "elements": 149,
+          "shadowHosts": 0,
+          "customElTags": [],
+          "closedOrUnreachableHosts": 0,
+          "htmlLen": 141779
+        },
+        "lightCounts": {
+          "input": 1,
+          "send": -1,
+          "answer": 0
+        },
+        "deepCounts": {
+          "input": 1,
+          "send": 0,
+          "answer": 0
+        },
+        "matched": {
+          "input": true,
+          "send": true,
+          "answer": false
+        },
+        "calibrated": false,
+        "inputCandidates": 0,
+        "textareaCandidates": 1,
+        "buttonCandidates": 6,
+        "bodyLen": 70
+      }
+    },
+    {
+      "name": "站点页面截图",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "file": "E:\\SYMBIO\\shell\\_selftest\\doubao-page.png",
+        "bytes": 46217
+      }
+    },
+    {
+      "name": "真实一问一答 第1轮",
+      "ok": false,
+      "warn": true,
+      "detail": {
+        "q": "请只回复两个字：收到",
+        "ok": false,
+        "errorType": "not-logged-in",
+        "ms": 25321,
+        "textHead": "",
+        "message": "未登录时未出现回答：该站可能需要先登录。请在「开登录窗」里手动登录一次后重试。"
+      }
+    },
+    {
+      "name": "真实一问一答 第2轮",
+      "ok": false,
+      "warn": true,
+      "detail": {
+        "q": "推荐一本适合入门的书",
+        "ok": false,
+        "errorType": "not-logged-in",
+        "ms": 25526,
+        "textHead": "",
+        "message": "未登录时未出现回答：该站可能需要先登录。请在「开登录窗」里手动登录一次后重试。"
+      }
+    },
+    {
+      "name": "提问后页面已截图",
+      "ok": true,
+      "warn": false,
+      "detail": {
+        "file": "E:\\SYMBIO\\shell\\_selftest\\doubao-after-ask.png",
+        "answerMatched": false,
+        "loggedIn": false
+      }
+    }
+  ],
+  "ok": true,
+  "afterAsk": {
+    "ok": true,
+    "site": "doubao",
+    "name": "豆包（网页端）",
+    "verified": false,
+    "verifiedFields": {
+      "inputSel": true,
+      "send": true,
+      "answerSel": false
+    },
+    "loggedIn": false,
+    "matched": {
+      "input": true,
+      "send": true,
+      "answer": false
+    },
+    "preflightOk": false,
+    "calibrated": false,
+    "answerSelUnverified": true,
+    "hydration": {
+      "hydrated": true,
+      "bodyLen": 254,
+      "elements": 2174,
+      "hit": true,
+      "waitedMs": 1,
+      "bySelector": true
+    },
+    "probeAttempts": 1,
+    "captured": "E:\\SYMBIO\\shell\\_selftest\\doubao-after-ask.png",
+    "dom": {
+      "url": "https://www.doubao.com/chat/",
+      "title": "豆包 - 字节跳动旗下 AI 智能助手",
+      "ready": "complete",
+      "viewport": {
+        "w": 1264,
+        "h": 835
+      },
+      "domStats": {
+        "elements": 2174,
+        "shadowHosts": 0,
+        "customElTags": [],
+        "closedOrUnreachableHosts": 0,
+        "htmlLen": 463610
+      },
+      "lightCounts": {
+        "input": 1,
+        "send": -1,
+        "answer": 0
+      },
+      "counts": {
+        "input": 1,
+        "send": 0,
+        "answer": 0
+      },
+      "candidates": {
+        "contenteditable": [
+          {
+            "i": 0,
+            "tag": "div",
+            "id": "",
+            "cls": "tiptap ProseMirror ProseMirror-focused",
+            "testid": "",
+            "editable": true,
+            "inShadow": false,
+            "w": 912,
+            "h": 24,
+            "text": "请只回复两个字：收到推荐一本适合入门的书"
+          }
+        ],
+        "textarea": [],
+        "sendButtons": [
+          {
+            "i": 0,
+            "tag": "button",
+            "id": "",
+            "cls": "group flex h-[36px] w-fit max-w-full min-w-0 items-center ro",
+            "testid": "workspace-switch-chip",
+            "editable": false,
+            "inShadow": false,
+            "w": 56,
+            "h": 36,
+            "text": "豆包"
+          },
+          {
+            "i": 1,
+            "tag": "button",
+            "id": "",
+            "cls": "flex shrink-0 items-center justify-center font-[400] whitesp",
+            "testid": "siderbar_close_btn",
+            "editable": false,
+            "inShadow": false,
+            "w": 26,
+            "h": 26,
+            "text": ""
+          },
+          {
+            "i": 2,
+            "tag": "button",
+            "id": "",
+            "cls": "shrink-0 font-[400] whitespace-nowrap ring-dbx-fill-highligh",
+            "testid": "",
+            "editable": false,
+            "inShadow": false,
+            "w": 122,
+            "h": 36,
+            "text": "下载电脑版"
+          },
+          {
+            "i": 3,
+            "tag": "button",
+            "id": "",
+            "cls": "semi-button semi-button-primary samantha-button-BghSMg secon",
+            "testid": "to_login_button",
+            "editable": false,
+            "inShadow": false,
+            "w": 73,
+            "h": 36,
+            "text": "登录"
+          },
+          {
+            "i": 4,
+            "tag": "button",
+            "id": "",
+            "cls": "group relative flex h-full cursor-pointer items-center justi",
+            "testid": "",
+            "editable": false,
+            "inShadow": false,
+            "w": 160,
+            "h": 48,
+            "text": "对话"
+          },
+          {
+            "i": 5,
+            "tag": "button",
+            "id": "",
+            "cls": "group relative flex h-full cursor-pointer items-center justi",
+            "testid": "",
+            "editable": false,
+            "inShadow": false,
+            "w": 160,
+            "h": 48,
+            "text": "工作"
+          }
+        ]
+      },
+      "iframes": [],
+      "answerNodes": [],
+      "lastReceiveTree": null,
+      "testIds": {
+        "chat-route-layout": 1,
+        "chat_route_layout_leftside_nav": 1,
+        "chat_route_layout_left_sash": 1,
+        "flow_chat_sidebar": 1,
+        "workspace-switch-chip": 1,
+        "create_office_task_button": 1,
+        "create_conversation_button": 1,
+        "sidebar-skills": 1,
+        "project-sidebar-entry": 1,
+        "app-open-api-service": 1,
+        "skill-page-item-more": 1,
+        "chat_list_wrapper": 1,
+        "conversation-list-v2-flat": 1,
+        "conversation-section": 1,
+        "conversation-list-v2-item": 5,
+        "conversation-list-v2-status-unread": 3,
+        "not_login_about_us": 1,
+        "siderbar_close_btn": 1,
+        "chat_header_download_client": 1,
+        "to_login_button": 1,
+        "flow_chat_guidance_page": 1,
+        "conversation-mode-switch": 1,
+        "office-sug-preview-direct": 1,
+        "chat_input": 1,
+        "upload_file_button": 1,
+        "chat_input_action_mode": 1,
+        "guidance-skill-bar": 1,
+        "skill_bar_button_5000": 1,
+        "skill_bar_button_3": 1,
+        "skill_bar_button_2": 1,
+        "skill_bar_button_17": 1,
+        "skill_bar_button_1005": 1,
+        "skill_bar_button_9": 1,
+        "skill_bar_button_more": 1,
+        "chat_input_action_model": 1,
+        "chat_input_local_break_button": 1,
+        "chat_input_send_button": 1,
+        "chat_input_input": 1,
+        "guidance_page_bottom_height": 1,
+        "file_drop_area": 1,
+        "samantha_layout_right_side": 1,
+        "login_content": 1,
+        "modal_close": 1,
+        "qrcode_switcher": 1,
+        "login_phone_verify_button": 1,
+        "login_agreement_check": 1,
+        "qrcode_image": 1
+      },
+      "bodyLen": 254,
+      "bodyHead": "豆包\n新工作任务\nCtrl J\n新对话\nCtrl Shift K\n项目\nAPI 服务\n更多\n最近\n收到\n收到\n1\n收到\n收到\n1\n收到\n1\n关于豆包\n下载电脑版\n登录\n有什么我能帮你的吗？\n对话\n工作\n对话\nPPT 生成\n图像生成\n帮我写作\n视频生成\n录音转写\n音乐生成\n更多\n快速\n\n请只回复两个字：收到推荐一本适合入门的书\n\n登录以解锁更多功能\n使用豆包或飞书账号登录\n手机号登录\n飞书账号一键登录\n已阅读并同意 用户协议、隐私政策、豆包账号服务须知\n抖音一键登录\n打开 豆包 / 飞书 App 扫码登录",
+      "loginHints": {
+        "hasLoginWord": true
+      }
+    }
+  },
+  "probe": {
+    "ok": true,
+    "site": "doubao",
+    "name": "豆包（网页端）",
+    "verified": false,
+    "verifiedFields": {
+      "inputSel": true,
+      "send": true,
+      "answerSel": false
+    },
+    "loggedIn": false,
+    "matched": {
+      "input": true,
+      "send": true,
+      "answer": false
+    },
+    "preflightOk": false,
+    "calibrated": false,
+    "answerSelUnverified": true,
+    "hydration": {
+      "hydrated": true,
+      "bodyLen": 70,
+      "elements": 149,
+      "hit": true,
+      "waitedMs": 1067,
+      "bySelector": true
+    },
+    "probeAttempts": 1,
+    "captured": "E:\\SYMBIO\\shell\\_selftest\\doubao-page.png",
+    "dom": {
+      "url": "https://www.doubao.com/chat/",
+      "title": "豆包 - 字节跳动旗下 AI 智能助手",
+      "ready": "complete",
+      "viewport": {
+        "w": 1264,
+        "h": 835
+      },
+      "domStats": {
+        "elements": 149,
+        "shadowHosts": 0,
+        "customElTags": [],
+        "closedOrUnreachableHosts": 0,
+        "htmlLen": 141779
+      },
+      "lightCounts": {
+        "input": 1,
+        "send": -1,
+        "answer": 0
+      },
+      "counts": {
+        "input": 1,
+        "send": 0,
+        "answer": 0
+      },
+      "candidates": {
+        "contenteditable": [],
+        "textarea": [
+          {
+            "i": 0,
+            "tag": "textarea",
+            "id": "",
+            "cls": "textarea-YelHeN",
+            "testid": "chat_input_input",
+            "editable": false,
+            "inShadow": false,
+            "w": 912,
+            "h": 24,
+            "text": ""
+          }
+        ],
+        "sendButtons": [
+          {
+            "i": 0,
+            "tag": "button",
+            "id": "",
+            "cls": "group flex h-[36px] w-fit max-w-full min-w-0 items-center ro",
+            "testid": "workspace-switch-chip",
+            "editable": false,
+            "inShadow": false,
+            "w": 56,
+            "h": 36,
+            "text": "豆包"
+          },
+          {
+            "i": 1,
+            "tag": "button",
+            "id": "",
+            "cls": "flex shrink-0 items-center justify-center font-[400] whitesp",
+            "testid": "siderbar_close_btn",
+            "editable": false,
+            "inShadow": false,
+            "w": 26,
+            "h": 26,
+            "text": ""
+          },
+          {
+            "i": 2,
+            "tag": "button",
+            "id": "",
+            "cls": "semi-button semi-button-primary samantha-button-BghSMg secon",
+            "testid": "to_login_button",
+            "editable": false,
+            "inShadow": false,
+            "w": 73,
+            "h": 36,
+            "text": "登录"
+          },
+          {
+            "i": 3,
+            "tag": "button",
+            "id": "",
+            "cls": "group relative flex h-full cursor-pointer items-center justi",
+            "testid": "",
+            "editable": false,
+            "inShadow": false,
+            "w": 160,
+            "h": 48,
+            "text": "对话"
+          },
+          {
+            "i": 4,
+            "tag": "button",
+            "id": "",
+            "cls": "group relative flex h-full cursor-pointer items-center justi",
+            "testid": "",
+            "editable": false,
+            "inShadow": false,
+            "w": 160,
+            "h": 48,
+            "text": "工作"
+          },
+          {
+            "i": 5,
+            "tag": "button",
+            "id": "flow-end-msg-send",
+            "cls": "shrink-0 font-[400] whitespace-nowrap ring-dbx-fill-highligh",
+            "testid": "chat_input_send_button",
+            "editable": false,
+            "inShadow": false,
+            "w": 36,
+            "h": 36,
+            "text": ""
+          }
+        ]
+      },
+      "iframes": [],
+      "answerNodes": [],
+      "lastReceiveTree": null,
+      "testIds": {
+        "chat-route-layout": 1,
+        "chat_route_layout_leftside_nav": 1,
+        "chat_route_layout_left_sash": 1,
+        "flow_chat_sidebar": 1,
+        "workspace-switch-chip": 1,
+        "create_office_task_button": 1,
+        "create_conversation_button": 1,
+        "sidebar-skills": 1,
+        "project-sidebar-entry": 1,
+        "app-open-api-service": 1,
+        "skill-page-item-more": 1,
+        "chat_list_wrapper": 1,
+        "not_login_about_us": 1,
+        "siderbar_close_btn": 1,
+        "to_login_button": 1,
+        "flow_chat_guidance_page": 1,
+        "conversation-mode-switch": 1,
+        "chat_input": 1,
+        "chat_input_local_break_button": 1,
+        "chat_input_send_button": 1,
+        "chat_input_input": 1,
+        "guidance_page_bottom_height": 1,
+        "samantha_layout_right_side": 1
+      },
+      "bodyLen": 70,
+      "bodyHead": "豆包\n新工作任务\nCtrl J\n新对话\nCtrl Shift K\n项目\nAPI 服务\n更多\n关于豆包\n登录\n有什么我能帮你的吗？\n对话\n工作",
+      "loginHints": {
+        "hasLoginWord": true
+      }
+    }
+  },
+  "asks": [
+    {
+      "q": "请只回复两个字：收到",
+      "ms": 25321,
+      "ok": false,
+      "errorType": "not-logged-in",
+      "message": "未登录时未出现回答：该站可能需要先登录。请在「开登录窗」里手动登录一次后重试。",
+      "status": 401
+    },
+    {
+      "q": "推荐一本适合入门的书",
+      "ms": 25526,
+      "ok": false,
+      "errorType": "not-logged-in",
+      "message": "未登录时未出现回答：该站可能需要先登录。请在「开登录窗」里手动登录一次后重试。",
+      "status": 401
+    }
+  ],
+  "exposedGroups": {
+    "file": [
+      "list",
+      "read"
+    ],
+    "session": [
+      "current",
+      "rotate"
+    ],
+    "tabs": [
+      "getOrder",
+      "setOrder"
+    ],
+    "scenario": [
+      "list",
+      "get"
+    ],
+    "config": [
+      "stage"
+    ],
+    "bridge": [
+      "sites",
+      "health",
+      "ask",
+      "login",
+      "hide",
+      "probe"
+    ],
+    "window": [
+      "minimize",
+      "close"
+    ]
+  },
+  "failed": 0,
+  "waiting": 2,
+  "finishedAt": "2026-11-04T04:33:23.591Z"
+}

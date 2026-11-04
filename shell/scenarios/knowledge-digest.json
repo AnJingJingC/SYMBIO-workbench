@@ -1,0 +1,11 @@
+{
+  "id": "knowledge-digest",
+  "name": "知识消化",
+  "description": "资料 → 知识卡片；右侧可直接向免费站提问，不烧付费额度",
+  "panels": [
+    { "id": "kd-files", "type": "file", "title": "工作区", "col": 0, "row": 0, "w": 3, "h": 7, "root": "." },
+    { "id": "kd-view", "type": "view", "title": "预览", "col": 3, "row": 0, "w": 4, "h": 7, "filesPanel": "kd-files" },
+    { "id": "kd-ai", "type": "harness", "title": "免费站问答（不烧付费额度）", "col": 7, "row": 0, "w": 5, "h": 7, "site": "doubao" },
+    { "id": "kd-status", "type": "reserved", "title": "状态栏占位", "col": 0, "row": 7, "w": 12, "h": 1 }
+  ]
+}

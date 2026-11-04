@@ -1,0 +1,19 @@
+{
+  "name": "symbio-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SYMBIO 自研壳层最简骨架：Main / Preload / Renderer + 单站薄壳（步 3：桥最小闭环）",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "node launch.mjs",
+    "bridge": "node launch.mjs --bridge-only",
+    "selftest": "node launch.mjs selftest.js",
+    "test": "node test-site.mjs && node smoke.mjs && node verify-contract.mjs",
+    "smoke": "node smoke.mjs",
+    "verify": "node verify-contract.mjs"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0"
+  }
+}

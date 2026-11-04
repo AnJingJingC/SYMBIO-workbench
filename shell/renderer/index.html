@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <!-- 硬边界：renderer 不许直连网络，一切能力经 app.* → IPC -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>SYMBIO Shell</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #131a2e;
+        --panel-2: #0f1526;
+        --line: #253049;
+        --text: #e6ecff;
+        --muted: #8b9ac2;
+        --accent: #6ea8fe;
+        --ok: #3ddc97;
+        --warn: #ffc861;
+        --err: #ff7b72;
+        --mono: "Cascadia Code", "Consolas", "Microsoft YaHei Mono", monospace;
+        --sans: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 13px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(180deg, #131a2e, #0d1324);
+        -webkit-app-region: drag;
+      }
+      header .brand { font-weight: 700; letter-spacing: 0.4px; }
+      header .brand span { color: var(--accent); }
+      header .grow { flex: 1; }
+      .tag {
+        font-size: 11px;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 3px 9px;
+        white-space: nowrap;
+      }
+      .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 6px; background: var(--muted); }
+      .dot.up { background: var(--ok); }
+      .dot.down { background: var(--err); }
+      .btn {
+        -webkit-app-region: no-drag;
+        background: #1b2440;
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 12px;
+        font-family: inherit;
+      }
+      .btn:hover { border-color: var(--accent); }
+      .btn.primary { background: #24406e; border-color: #33578f; }
+      .btn.ghost { background: transparent; }
+      .btn.small { padding: 4px 9px; font-size: 11px; }
+      .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+      #tabs {
+        display: flex;
+        gap: 6px;
+        padding: 8px 14px 0;
+        border-bottom: 1px solid var(--line);
+        overflow-x: auto;
+      }
+      .tab {
+        padding: 7px 14px;
+        border: 1px solid var(--line);
+        border-bottom: none;
+        border-radius: 9px 9px 0 0;
+        background: var(--panel-2);
+        color: var(--muted);
+        cursor: pointer;
+        white-space: nowrap;
+        user-select: none;
+      }
+      .tab.active { background: var(--panel); color: var(--text); border-color: var(--accent); }
+      .tab.dragging { opacity: 0.4; }
+
+      #grid {
+        flex: 1;
+        display: grid;
+        grid-template-columns: repeat(12, 1fr);
+        grid-auto-rows: 56px;
+        gap: 8px;
+        padding: 10px 14px;
+        overflow: auto;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        min-height: 0;
+      }
+      .panel > h3 {
+        margin: 0;
+        padding: 8px 11px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .panel > .body { flex: 1; overflow: auto; padding: 8px 10px; min-height: 0; }
+      .hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
+      .unknown-type { color: var(--muted); font-style: italic; }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 6px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      .row:hover { background: #1a2340; }
+      .row.dir { color: var(--accent); }
+      .row .sz { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+      pre.preview {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.6;
+        color: #cfd8f5;
+      }
+
+      .chat { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+      .chat .log { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+      .bubble { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+      .bubble.q { background: #18223c; }
+      .bubble.a { background: #12253a; border-color: #2a4a6b; }
+      .bubble.e { background: #2a1a1d; border-color: #5a2a30; color: #ffb4ae; }
+      .chat textarea {
+        width: 100%;
+        resize: none;
+        height: 62px;
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        font-family: inherit;
+        font-size: 12px;
+      }
+      .chat .bar { display: flex; gap: 8px; align-items: center; }
+      select {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 5px 8px;
+        font-family: inherit;
+        font-size: 12px;
+      }
+
+      footer {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        padding: 6px 14px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 11px;
+        background: var(--panel-2);
+      }
+      footer .grow { flex: 1; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">SYMBIO <span>Shell</span></div>
+      <span class="tag" id="tag-stage">阶段 —</span>
+      <span class="tag" id="tag-session">会话 —</span>
+      <div class="grow"></div>
+      <span class="tag"><span class="dot" id="bridge-dot"></span><span id="bridge-text">桥 —</span></span>
+      <button class="btn" id="btn-rotate" title="切换会话（Main 单一权威）">切换会话</button>
+      <button class="btn" id="btn-close" title="关闭">✕</button>
+    </header>
+
+    <div id="tabs"></div>
+    <div id="grid"></div>
+
+    <footer>
+      <span id="st-scene">场景 —</span>
+      <span id="st-panels">面板 0</span>
+      <span id="st-queue">桥统计 —</span>
+      <div class="grow"></div>
+      <span>renderer 无 Node 权限 · 能力经 app.* 白名单</span>
+    </footer>
+
+    <script src="webai-bridge.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

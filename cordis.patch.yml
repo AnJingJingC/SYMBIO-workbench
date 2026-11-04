@@ -1,0 +1,7 @@
+- insert:
+    - id: symbio-workbench
+      name: symbio-workbench
+      config:
+        root: !!js dshHomePath('symbio-workbench')
+        dataRoot: 'E:/SYMBIO'
+        bridgeUrl: 'http://127.0.0.1:31239'

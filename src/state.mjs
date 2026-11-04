@@ -1,0 +1,243 @@
+// SYMBIO 工作台 · 业务状态只读解析器
+//
+// 设计约束（来自五红线的「事实」条）：
+//   · 所有数字都从 E:/SYMBIO 的真实文件解析出来，一处都不许猜；
+//   · 任何文件读不到，只记录 issues 并给 null，绝不填兜底假值；
+//   · 本模块只读，不写、不迁移、不复制任何业务数据。
+
+import { readFile, readdir } from 'node:fs/promises';
+import path from 'node:path';
+
+export const LAYERS = [
+  { key: '00-constitution', label: 'L0 宪法', desc: '不可修改的规则与红线' },
+  { key: '10-shared', label: 'L1 共享', desc: '跨场景结论与任务看板' },
+  { key: '20-scenes', label: 'L2 场景', desc: '每个场景一个项目' },
+  { key: '30-personal', label: 'L3 个人', desc: '私人档案，不参与主线' },
+  { key: '90-archive', label: 'L5 归档', desc: '只加不改' },
+];
+
+async function readText(root, rel, issues) {
+  try {
+    return await readFile(path.join(root, rel), 'utf8');
+  } catch (error) {
+    issues.push({ path: rel, reason: error?.code ?? String(error?.message ?? '读取失败') });
+    return null;
+  }
+}
+
+async function readJson(root, rel, issues) {
+  const text = await readText(root, rel, issues);
+  if (text === null) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    issues.push({ path: rel, reason: `JSON 解析失败：${error?.message ?? ''}` });
+    return null;
+  }
+}
+
+/** 把 markdown 表格拆成单元格数组；跳过分隔行、表头与纯占位行。 */
+function tableRows(md) {
+  if (!md) return [];
+  const out = [];
+  for (const line of String(md).split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t.startsWith('|') || !t.endsWith('|')) continue;
+    const cells = t.slice(1, -1).split('|').map((c) => c.trim());
+    if (!cells.length) continue;
+    if (cells.every((c) => /^:?-{2,}:?$/.test(c) || c === '')) continue; // |---|---|
+    if (/^(时间|文件|层|场景|来源|状态|标题)$/.test(cells[0])) continue; // 表头
+    if (cells.every((c) => c === '' || c === '—' || c === '-' || /^（/.test(c))) continue; // 「（当前无…）」
+    out.push(cells);
+  }
+  return out;
+}
+
+function section(md, heading) {
+  if (!md) return '';
+  const lines = String(md).split(/\r?\n/);
+  const start = lines.findIndex((l) => new RegExp(`^##\\s+${heading}\\s*$`).test(l.trim()));
+  if (start < 0) return '';
+  const body = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^##\s+/.test(lines[i].trim())) break;
+    body.push(lines[i]);
+  }
+  return body.join('\n').trim();
+}
+
+async function countTree(root, rel, issues) {
+  const abs = path.join(root, rel);
+  let files = 0;
+  let bytes = 0;
+  const walk = async (dir) => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      issues.push({ path: path.relative(root, dir), reason: error?.code ?? '目录不可读' });
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(p);
+      else if (e.isFile()) {
+        files += 1;
+        try {
+          const s = await readFile(p);
+          bytes += s.length;
+        } catch {
+          /* 单文件读失败只影响字节统计，已在别处记录 */
+        }
+      }
+    }
+  };
+  await walk(abs);
+  return { files, bytes };
+}
+
+async function readCards(root, issues) {
+  const rel = 'memory/20-scenes/knowledge-digest/cards';
+  let entries;
+  try {
+    entries = await readdir(path.join(root, rel), { withFileTypes: true });
+  } catch (error) {
+    issues.push({ path: rel, reason: error?.code ?? '卡片目录不可读' });
+    return { available: false, total: 0, items: [], indexChars: 0, indexGeneratedAt: null };
+  }
+  const files = entries.filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.md') && e.name !== '索引.md');
+  const items = [];
+  for (const f of files) {
+    const text = await readText(root, `${rel}/${f.name}`, issues);
+    const title = (text ?? '').split(/\r?\n/).find((l) => /^#\s+/.test(l))?.replace(/^#\s+/, '').trim() || f.name;
+    items.push({ file: f.name, title, chars: (text ?? '').length });
+  }
+  items.sort((a, b) => a.file.localeCompare(b.file));
+  const indexText = await readText(root, `${rel}/索引.md`, issues);
+  const generated = /生成于\s*([0-9-]+\s*[0-9:]+)/.exec(indexText ?? '')?.[1] ?? null;
+  return {
+    available: true,
+    total: items.length,
+    items,
+    indexChars: (indexText ?? '').length,
+    indexGeneratedAt: generated,
+  };
+}
+
+async function readRedLines(root, issues) {
+  const text = await readText(root, 'AGENTS.md', issues);
+  if (text === null) return [];
+  const out = [];
+  const re = /^\d+\.\s+\*\*(.+?)\*\*\s*—\s*(.+)$/;
+  for (const line of String(text).split(/\r?\n/)) {
+    const m = re.exec(line.trim());
+    if (m) {
+      let summary = m[2].replace(/\s+/g, ' ').trim();
+      if (summary.length > 84) summary = summary.slice(0, 84) + '…';
+      out.push(`${m[1]}：${summary}`);
+    }
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
+function todayLocal() {
+  // 工作台时区 Asia/Shanghai；用 sv-SE 得到稳定的 YYYY-MM-DD
+  return new Date().toLocaleDateString('sv-SE');
+}
+
+/**
+ * 读取业务状态。永远 resolve，不抛异常。
+ * @param {string} root E:/SYMBIO 这类业务数据根目录
+ */
+export async function readState(root) {
+  const issues = [];
+  const checkedAt = new Date().toISOString();
+
+  const config = await readJson(root, 'config/symbio.config.json', issues);
+  const board = await readText(root, 'memory/10-shared/任务看板.md', issues);
+  const handoff = await readText(root, 'memory/20-scenes/knowledge-digest/当前交接.md', issues);
+  const redlines = await readText(root, 'memory/00-constitution/REDLINES.md', issues);
+  const ledger = await readJson(root, 'memory/10-shared/花费台账.json', issues);
+
+  // 看板两段：未闭环任务 / 冲突与待裁决，用二级标题切开再各自解析
+  const splitAt = board ? board.indexOf('## 冲突与待裁决') : -1;
+  const taskPart = splitAt >= 0 ? board.slice(0, splitAt) : (board ?? '');
+  const conflictPart = splitAt >= 0 ? board.slice(splitAt) : '';
+  const conflictRows = tableRows(conflictPart);
+  const tasks = tableRows(taskPart).map((c) => ({
+    time: c[0] ?? '', source: c[1] ?? '', goal: c[2] ?? '', task: c[3] ?? '', status: c[4] ?? '', receipt: c[5] ?? '',
+  }));
+  const conflicts = conflictRows.map((c) => ({ time: c[0] ?? '', matter: c[1] ?? '', scene: c[2] ?? '', decision: c[3] ?? '' }));
+
+  const cards = await readCards(root, issues);
+  const redLines = await readRedLines(root, issues);
+  const layers = [];
+  for (const layer of LAYERS) {
+    layers.push({ ...layer, ...(await countTree(root, `memory/${layer.key}`, issues)) });
+  }
+
+  let skills = null;
+  let tools = null;
+  try {
+    skills = (await readdir(path.join(root, '.dsh/skills'), { withFileTypes: true }))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch (error) {
+    issues.push({ path: '.dsh/skills', reason: error?.code ?? '技能目录不可读' });
+  }
+  try {
+    tools = (await readdir(path.join(root, 'tools'), { withFileTypes: true }))
+      .filter((e) => e.isFile() && e.name.endsWith('.mjs') && e.name !== 'intake.mjs')
+      .map((e) => e.name.replace(/\.mjs$/, ''))
+      .sort();
+  } catch (error) {
+    issues.push({ path: 'tools', reason: error?.code ?? '工具目录不可读' });
+  }
+
+  const day = todayLocal();
+  const todayEntry = ledger?.days?.[day] ?? null;
+  const todaySpend = typeof todayEntry === 'number' ? todayEntry : (todayEntry?.totalCNY ?? todayEntry?.spentCNY ?? null);
+
+  const coreOk = !!config && board !== null && handoff !== null && cards.available;
+
+  return {
+    ok: coreOk,
+    root,
+    checkedAt,
+    issues,
+    config: config
+      ? {
+          stage: config.stage?.current ?? null,
+          modules: config.stage?.modules ?? null,
+          cardMaxChars: config.limits?.cardMaxChars ?? null,
+          sceneMemoryMaxKB: config.limits?.sceneMemoryMaxKB ?? null,
+          dailyBudgetCNY: config.cost?.dailyBudgetCNY ?? null,
+          defaultScene: config.paths?.defaultScene ?? null,
+          egressAllowlist: config.privacy?.egressAllowlist ?? null,
+        }
+      : null,
+    queue: { tasks, conflicts },
+    cards,
+    memory: {
+      layers,
+      totalFiles: layers.reduce((n, l) => n + l.files, 0),
+      totalBytes: layers.reduce((n, l) => n + l.bytes, 0),
+    },
+    handoff: handoff
+      ? {
+          status: section(handoff, '当前状态'),
+          next: section(handoff, '下一步'),
+          unresolved: section(handoff, '未决问题'),
+          chars: handoff.length,
+        }
+      : null,
+    ledger: ledger
+      ? { currency: ledger.currency ?? 'CNY', day, todaySpend, daysCount: Object.keys(ledger.days ?? {}).length }
+      : null,
+    privacyDoc: redlines ? { loaded: true, chars: redlines.length, excerpt: redlines.slice(0, 360) } : { loaded: false, chars: 0, excerpt: '' },
+    redLines,
+    assets: { skills, tools },
+  };
+}

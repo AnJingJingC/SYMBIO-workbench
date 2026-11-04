@@ -1,0 +1,3 @@
+*.tgz
+memory/
+node_modules/

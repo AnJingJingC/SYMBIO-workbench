@@ -1,0 +1,52 @@
+{
+  "name": "symbio-workbench",
+  "version": "0.3.5",
+  "description": "SYMBIO 协同进化工作台 · 单主场景「知识消化」。把六层记忆、通用技能与免费 AI 桥挂进 DSH Desktop 的一块业务面板。",
+  "type": "module",
+  "main": "./dsh/index.mjs",
+  "exports": {
+    ".": "./dsh/index.mjs",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "dsh",
+    "src",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "icon.svg"
+  ],
+  "license": "MIT",
+  "author": "SYMBIO Workbench contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AnJingJingC/SYMBIO-workbench.git"
+  },
+  "icon": "icon.svg",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node --check dsh/index.mjs && node --check src/api.mjs && node --check src/state.mjs && node --check src/tools.mjs && node --check lib/client.js",
+    "test": "node --test test/*.test.mjs",
+    "verify": "npm run check && npm test"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1 <5.0.0-0",
+    "@deepseek-ai/schemastery": ">=3.18.2 <4.0.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "dsh-desktop-workbenches"
+      ]
+    }
+  }
+}

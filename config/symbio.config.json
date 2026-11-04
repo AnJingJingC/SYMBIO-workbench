@@ -1,0 +1,78 @@
+{
+  "$comment": "SYMBIO 工作台主配置。改这里等于改工作台的物理法则，改前请备份。",
+  "version": "1.0.0",
+  "workbench": {
+    "name": "SYMBIO",
+    "codename": "协同进化工作台",
+    "language": "zh-CN",
+    "timezone": "Asia/Shanghai",
+    "owner_title": "宿主"
+  },
+  "stage": {
+    "current": "A",
+    "$current_enum": ["A", "AB", "ABC"],
+    "modules": {
+      "intake": true,
+      "pii-guard": true,
+      "memory-write": true,
+      "handoff": true,
+      "recall": true,
+      "dispatch": false,
+      "health": true,
+      "portrait": false,
+      "part": false,
+      "evolve": false
+    }
+  },
+  "limits": {
+    "sceneMemoryMaxKB": 25,
+    "handoffMaxKB": 4,
+    "peerReplyMaxChars": 200,
+    "indexTriggerFiles": 30,
+    "cardMaxChars": 1200,
+    "archiveKeepRaw": true
+  },
+  "privacy": {
+    "defaultMode": "local-only",
+    "l1BlockAlways": true,
+    "l2RequireOwnerConfirm": true,
+    "l3RecordOnly": true,
+    "egressAllowlist": [],
+    "redactionTokenFormat": "«{LEVEL}_{KIND}_{N}»",
+    "scanBefore": ["ingest", "memory-write", "egress"]
+  },
+  "cost": {
+    "$comment": "预算硬闸。注意：DSH 0.2.1 原生不读取本段配置（已查实），所以这些值是‘判定依据’，真正执行靠 tools/spend-guard.mjs + AGENTS.md 硬规则第 5 条。",
+    "dailyBudgetCNY": 5,
+    "stopOnBalanceError": true,
+    "noDispatchAboveCpuPercent": 90,
+    "noDispatchAboveMemoryPercent": 90,
+    "cacheRepeatedReads": true,
+    "summarizeWithCheapModelFirst": true,
+    "failRateRedlinePct": 15,
+    "enforcement": "tool+discipline",
+    "ledgerPath": "memory/10-shared/花费台账.json",
+    "freeFirstChain": [
+      "glm-5.3-flash-free",
+      "deepseek-v4.1-flash-free",
+      "nemotron-3.5-super-vl-free",
+      "nemotron-3.5-lightning-free",
+      "mimo-v2.6-flash-free",
+      "flint-40b-free",
+      "beam-free",
+      "pulse-alpha-free",
+      "big-pickle",
+      "kilo-auto/free"
+    ],
+    "paidFallback": ["glm-5.3-flash", "deepseek-v4.1-flash", "step-5-preview"]
+  },
+  "paths": {
+    "memoryRoot": "memory",
+    "constitution": "memory/00-constitution",
+    "shared": "memory/10-shared",
+    "scenes": "memory/20-scenes",
+    "personal": "memory/30-personal",
+    "archive": "memory/90-archive",
+    "defaultScene": "knowledge-digest"
+  }
+}
