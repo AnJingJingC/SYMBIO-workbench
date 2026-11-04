@@ -97,6 +97,10 @@ need_receipt: yes | no      ← 关键字段
 
 ## 任务看板写法
 
+> **优先用确定性工具，不要手改表格**：`node tools/bus.mjs dispatch --from <场景> --to <场景> --task "..." --accept "..."`
+> 派单/回执/查板三条命令（dispatch / receipt / board）自带防重复 hash、闭环划行、台账落 `90-archive/任务台账-<月>.md`。
+> 手写表格仅在 bus 不可用时兜底，格式必须与下表一致。
+
 `memory/10-shared/任务看板.md` 只保留**未闭环**的条目：
 
 ```markdown

@@ -10,14 +10,18 @@
   },
   "stage": {
     "current": "A",
-    "$current_enum": ["A", "AB", "ABC"],
+    "$current_enum": [
+      "A",
+      "AB",
+      "ABC"
+    ],
     "modules": {
       "intake": true,
       "pii-guard": true,
       "memory-write": true,
       "handoff": true,
       "recall": true,
-      "dispatch": false,
+      "dispatch": true,
       "health": true,
       "portrait": false,
       "part": false,
@@ -39,7 +43,11 @@
     "l3RecordOnly": true,
     "egressAllowlist": [],
     "redactionTokenFormat": "«{LEVEL}_{KIND}_{N}»",
-    "scanBefore": ["ingest", "memory-write", "egress"]
+    "scanBefore": [
+      "ingest",
+      "memory-write",
+      "egress"
+    ]
   },
   "cost": {
     "$comment": "预算硬闸。注意：DSH 0.2.1 原生不读取本段配置（已查实），所以这些值是‘判定依据’，真正执行靠 tools/spend-guard.mjs + AGENTS.md 硬规则第 5 条。",
@@ -64,7 +72,11 @@
       "big-pickle",
       "kilo-auto/free"
     ],
-    "paidFallback": ["glm-5.3-flash", "deepseek-v4.1-flash", "step-5-preview"]
+    "paidFallback": [
+      "glm-5.3-flash",
+      "deepseek-v4.1-flash",
+      "step-5-preview"
+    ]
   },
   "paths": {
     "memoryRoot": "memory",

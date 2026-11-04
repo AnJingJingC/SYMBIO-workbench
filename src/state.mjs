@@ -150,6 +150,9 @@ function todayLocal() {
  * 读取业务状态。永远 resolve，不抛异常。
  * @param {string} root E:/SYMBIO 这类业务数据根目录
  */
+// 内部 Worker：确定性落盘基础设施，不进面板「工具箱」（面板只列 6 个用户可点工具）
+const INTERNAL_TOOLS = new Set(['intake.mjs', 'bus.mjs', 'autopilot.mjs', 'lint-weekly.mjs']);
+
 export async function readState(root) {
   const issues = [];
   const checkedAt = new Date().toISOString();
@@ -189,7 +192,7 @@ export async function readState(root) {
   }
   try {
     tools = (await readdir(path.join(root, 'tools'), { withFileTypes: true }))
-      .filter((e) => e.isFile() && e.name.endsWith('.mjs') && e.name !== 'intake.mjs')
+      .filter((e) => e.isFile() && e.name.endsWith('.mjs') && !INTERNAL_TOOLS.has(e.name))
       .map((e) => e.name.replace(/\.mjs$/, ''))
       .sort();
   } catch (error) {
