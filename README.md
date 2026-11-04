@@ -1,9 +1,10 @@
-# SYMBIO 工作台 · DSH Desktop 业务面板（v0.3.2）
+# SYMBIO 工作台 · DSH Desktop 业务面板（v0.3.7）
 
-把 `E:/SYMBIO` 的六层记忆、10 个技能、6 个工具与免费 AI 桥，挂进 `dataelement/dsh-desktop` 的一块业务面板。单主场景：**知识消化**（资料 → 可检索知识卡片）。
+把 `E:/SYMBIO` 的六层记忆、11 个技能、6 个工具与免费 AI 桥，挂进 `dataelement/dsh-desktop` 的一块业务面板。两个场景：**知识消化**（资料 → 可检索知识卡片）与 **深度调研**（问题 → 有证据的答案），跨场景派单走文件总线。
 
-- 业务面板在左 60%，**右侧对话完全复用宿主原生 UI**
-- 本地开发包，省略 `repository`、不填 `id` → 身份由宿主派生为 `local:symbio-workbench`
+- 业务面板在左 60%，**右侧对话完全复用宿主原生 UI**；顶部状态栏吸顶常驻
+- 安装：宿主 `install_local_workbench({ path: "<本包>.tgz", replace: true })`，返回 `applied` 即生效（详见 `INSTALL-PROMPT.txt`）
+- 身份：本地安装时由宿主派生为 `local:symbio-workbench`；`repository` 已指向本仓库，供市场索引溯源
 - **只读**：面板不写入、不迁移、不复制 `E:/SYMBIO` 的任何业务数据
 
 ---
@@ -98,21 +99,22 @@ cd E:/SYMBIO/shell && npm run bridge
 ## 还没做的 / 诚实边界
 
 - **工具箱接入宿主 Agent**：dsh-desktop 工作台契约只给「面板 + `/api/symbio/*` 路由」，`DshClientManifest.inject` 明确「不是 Cordis 服务注入」，**没有**宿主 Agent 工具注册服务。但 10 个技能已 `node tools/*.mjs` 在对话间接触发这些工具，且本版把工具箱做成 `GET /api/symbio/tools` 机器可读清单 + `POST /api/symbio/tools/run` 可调用面（详见 `docs/工具箱-宿主Agent接入.md`）。要更严格的「Agent 原生工具」集成，需等 dsh-desktop 开放对应契约。
-- 多面板网格 / 2D 拓扑画布 / 多场景同屏（第一项受宿主形态限制，做不到）
+- **多面板网格 / 多场景同屏**：宿主只给一块业务面板注册位（`desktopWorkbenches.register`），右侧永远是宿主原生会话，做不到。已在单面板内用响应式两列网格 + 吸顶状态栏 + 内嵌拓扑图逼近观感（见 `docs/GUI边界评估.md`）
 - 桥的登录态长期稳定性未验收（需手动登录一次后复验）
+- DeepSeek / 通义千问 / 智谱三个站点选择器为经验猜测（`verified: false`），需本机 `node probe-site.mjs <site>` 校准后才可依赖
 
-## 上架市场前置（v0.3.3 已补齐字段）
+## 分发与市场收录（v0.3.7 定案）
 
-工作台市场（mydsh.xyz）按 **GitHub 仓库** 拉取源码分发（dsh 的 `checkGithubConnection` 只读 GitHub spec），本地包因缺 `repository` 会被宿主派生成 `local:symbio-workbench` 身份、不能上架。本版已补齐：
+本仓库（`AnJingJingC/SYMBIO-workbench`）就是这个工作台的源码与发行仓：仓库根 = 包本体（`package.json`/`dsh`/`src`/`lib`），配套 `tools`/`shell`/`docs`/`config`/`.dsh/skills` 一并公开；`memory/` 属个人数据，**不入库**。
 
 | 字段 | 位置 | 值 | 作用 |
 |---|---|---|---|
-| `repository` | `package.json` | `https://github.com/mashanglinyu/luanyujia-workbench` | 市场拉取源码的锚点；也是本包的派生来源 |
+| `repository` | `package.json` | `https://github.com/AnJingJingC/SYMBIO-workbench` | 市场按此拉源码 / 溯源 |
 | `id` | `cordis.patch.yml` | `symbio-workbench` | 插件稳定标识（本地装才被加 `local:` 前缀） |
 | `icon` | `package.json` + `icon.svg` | 突触节点图标（≤256KiB） | 市场卡片展示 |
 | `author` | `package.json` | SYMBIO Workbench contributors | 市场展示 |
 
-> ⚠️ **上架前必做**：把 `repository` 改成**你自己在 GitHub 托管此包的仓库 URL**。当前填的是「派生来源仓库」，仅供通过格式校验与溯源；市场会按 `repository` 拉源码，指向他人的仓库会导致拉到错误代码。改完后 `pnpm pack` 重新出包即可提市场。
+> **mydsh.xyz 的真实规则**（已核实其站点源码与 `trust` 页）：它是**纯索引站，不托管任何文件**，所有条目指向 GitHub 原仓库；「＋上传」通道当前关闭（`UPLOAD_OPEN = false`）。因此**上架 = 申请收录**，操作是在 `mashanglinyu/luanyujia-workbench` 的 Issues 里提交仓库地址与简介，核实后 48 小时内处理。安装包（`.tgz`）不入库、不上传，由本机 `pnpm pack` 产出。
 
 提交流程：`pnpm pack` → 在 mydsh.xyz 工作台市场上传 `symbio-workbench-0.3.3.tgz` → 填仓库 URL 与展示信息 → 发布。本地升级仍走 `install_local_workbench({ path, replace })`。
 
