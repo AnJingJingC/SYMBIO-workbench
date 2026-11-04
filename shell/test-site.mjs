@@ -7,6 +7,9 @@
 //   2) receive_message 的正文会混进"搜索 N 个关键词"状态行与"相关视频"卡片 → 需要 clean()。
 
 import DOUBAO from './sites/doubao.mjs';
+import DEEPSEEK from './sites/deepseek.mjs';
+import QIANWEN from './sites/qianwen.mjs';
+import ZHIPU from './sites/zhipu.mjs';
 
 let pass = 0;
 let fail = 0;
@@ -84,6 +87,72 @@ check('clean 去掉「已完成思考」标题行', !DOUBAO.clean(WITH_THINKING)
 check('clean 去掉思考标题后正文保留', DOUBAO.clean(WITH_THINKING).startsWith('消息队列是生产者与消费者'), DOUBAO.clean(WITH_THINKING));
 const DEEP = ['已深度思考（用时 12 秒）', '结论：先做最小闭环，再谈扩展。'].join('\n');
 check('clean 去掉「已深度思考（用时 N 秒）」', !DOUBAO.clean(DEEP).includes('深度思考'), DOUBAO.clean(DEEP));
+
+// ── 三站校准防回退（2026-11-05 真机实测结果）────────────────────────────
+// 教训：这三个站最初全是"合理猜测"的选择器，而猜测错了的表现极隐蔽——
+//   不是报错，而是"已登录被判成未登录"（输入框不存在）或
+//   "把名片卡/思考过程当答案交回来"。校准结果必须钉住，否则下次改版静默退化。
+const CALIBRATED = [
+  ['deepseek', DEEPSEEK],
+  ['qianwen', QIANWEN],
+  ['zhipu', ZHIPU],
+];
+for (const [id, s] of CALIBRATED) {
+  check(`${id} 已校准 verified:true`, s.verified === true, String(s.verified));
+  check(
+    `${id} 三要素均标记实测`,
+    !!(s.verifiedFields?.inputSel && s.verifiedFields?.send && s.verifiedFields?.answerSel),
+  );
+  check(`${id} answerSel 非空`, Boolean(s.answerSel));
+  check(`${id} 有思考占位判据（占位语不许当答案）`, typeof s.isPendingAnswer === 'function');
+  check(`${id} 发送方式可用（sendSel 或回车）`, s.sendSel === '' || typeof s.sendSel === 'string');
+}
+
+// deepseek：输入框是**无 id 的 textarea**（旧猜测 textarea#chat-input 不存在，
+// 导致 loggedIn() 把已登录判成未登录）
+check('deepseek 输入框用实测类名', DEEPSEEK.inputSel.includes('.ds-scroll-area'), DEEPSEEK.inputSel);
+
+// 智谱：页面同时有"思考块"和"答案块"，两者都是 .markdown-body。
+// 必须靠祖先 :not([class*=thinking]) 排除，否则交回的是思考过程。
+check(
+  'zhipu 答案选择器排除思考容器',
+  /:not\(\[class\*="thinking"\]\)/.test(ZHIPU.answerSel),
+  ZHIPU.answerSel,
+);
+check('zhipu 输入框用实测类名', ZHIPU.inputSel.includes('.scroll-display-none'), ZHIPU.inputSel);
+check('zhipu 思考占位「回答中」判为未完成', ZHIPU.isPendingAnswer('回答中') === true);
+check('zhipu 正常答案不判为占位', ZHIPU.isPendingAnswer('索引是对数据库表中一列或多列的值进行排序的辅助结构') === false);
+check(
+  'zhipu clean 去掉「以上内容为 AI 生成」声明',
+  !/以上内容为/.test(ZHIPU.clean('索引是辅助数据结构。\n以上内容为 AI 生成，不代表开发者立场，请勿删除或修改本标记')),
+  ZHIPU.clean('索引是辅助数据结构。\n以上内容为 AI 生成，不代表开发者立场，请勿删除或修改本标记'),
+);
+check('zhipu clean 去掉行尾引用角标', !/kepuchina/.test(ZHIPU.clean('索引是辅助数据结构。 kepuchina.cn +1')));
+
+// 千问：已从 tongyi.aliyun.com 迁到 qianwen.com，类名整体换成 qk-md-*，
+// 旧选择器 .tongyi-markdown/.answer-item/.markDown 全部不存在。
+check('qianwen 不再用旧版类名', !/tongyi-markdown|answer-item|\.markDown/.test(QIANWEN.answerSel), QIANWEN.answerSel);
+check('qianwen 答案容器为 qk-markdown', QIANWEN.answerSel.includes('qk-markdown'), QIANWEN.answerSel);
+check(
+  'qianwen clean 去掉追问引导行',
+  !/需要我为你/.test(QIANWEN.clean('缓存就是先存到更快的地方。\n需要我为你整理一份报告吗？')),
+  QIANWEN.clean('缓存就是先存到更快的地方。\n需要我为你整理一份报告吗？'),
+);
+// 追问引导的措辞每次都不一样（真机见过「需要我为你整理…」「需要我继续用一句话为你解释…」），
+// 断言要点是"按结构删"而不是"枚举句子"，否则换一个说法就漏。
+check(
+  'qianwen clean 去掉换措辞的追问行',
+  !/需要我/.test(QIANWEN.clean('索引是快速定位数据的数据结构。\n需要我继续用一句话为你解释“事务”吗？\n好的，继续')),
+  QIANWEN.clean('索引是快速定位数据的数据结构。\n需要我继续用一句话为你解释“事务”吗？\n好的，继续'),
+);
+// 真机原样样本（2026-11-05 三站验证时抓到的）：角标夹在句中 + 追问提示换了说法
+const QW_RAW = '日志是计算机系统在运行过程中按时间顺序记录的事件和状态信息。348\n\n好的，帮我解释';
+check(
+  'qianwen clean 去掉句中角标与「好的，帮我解释」',
+  QIANWEN.clean(QW_RAW) === '日志是计算机系统在运行过程中按时间顺序记录的事件和状态信息。',
+  QIANWEN.clean(QW_RAW),
+);
+check('qianwen clean 去掉句末引用角标', QIANWEN.clean('索引是辅助数据结构。13') === '索引是辅助数据结构。', QIANWEN.clean('索引是辅助数据结构。13'));
 
 console.log(`\n通过 ${pass} / 失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

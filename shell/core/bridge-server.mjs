@@ -75,7 +75,18 @@ export async function startBridge({ dispatcher, port = 31239 }) {
           return send(res, 400, { ok: false, errorType: 'bad-request', message: '缺少 ?site=xxx' });
         }
         try {
-          const result = await dispatcher.probeSite(siteId, { captureTo: url.searchParams.get('capture') || undefined });
+          // 校准覆盖：verified:false 的站选择器是猜的，猜错就探不到东西。
+          // ?input= / ?send= / ?answer= 允许"临时试任意候选"，只影响本次探测，
+          // 不写回站点定义——校准完再决定要不要回写，避免把猜测当事实。
+          const overrides = {
+            inputSel: url.searchParams.get('input') || undefined,
+            sendSel: url.searchParams.get('send') || undefined,
+            answerSel: url.searchParams.get('answer') || undefined,
+          };
+          const result = await dispatcher.probeSite(siteId, {
+            captureTo: url.searchParams.get('capture') || undefined,
+            overrides,
+          });
           const { status, ...body } = result;
           return send(res, status ?? (result.ok ? 200 : 500), body);
         } catch (e) {

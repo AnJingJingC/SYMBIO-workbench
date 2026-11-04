@@ -113,36 +113,105 @@ export function createDispatcher({ sites, driver, log = () => {} }) {
       });
     }
 
-    const typed = await page.type(question);
-    if (typed === false) throw tagged('selector-stale', '输入未落进输入框，选择器可能过期。');
+    // 发送一次：先写问题，再触发站点发送。
+    // 返回发送前已有的回答条数——新回答 = 条数变多的那一条。
+    // 这是修掉假阳性的关键：旧实现取"最后一个匹配节点"，会把用户自己的问句当回答交回去。
+    const post = async () => {
+      // 发送前确保窗口可见（2026-11-05 真机定位）：
+      // 隐藏窗口里 webContents 收不到"可信"输入事件——千问首页的 contenteditable
+      // 能把文字写进 DOM，但 Enter 永远不生效（页面上既没有问句也没有新回答，
+      // 表现为"首帧超时"，极易被误判成站点改版/选择器失效）。
+      // 窗口一旦可见，同一句话 5 秒就答完。这里只显示一次，之后保持可见，不会反复弹。
+      if (typeof page.isVisible === 'function' && typeof page.setVisible === 'function') {
+        const vis = await page.isVisible().catch(() => true);
+        if (!vis) {
+          log({ level: 'info', msg: '窗口处于隐藏状态，发送前显示窗口（隐藏窗口里 Enter 不生效）', site: site.id });
+          await page.setVisible(true);
+          await new Promise((r) => setTimeout(r, 250));
+          await page.focus(site.inputSel);
+        }
+      }
 
-    // 发送前先数一遍：新回答 = 条数变多的那一条。
-    // 这一步是修掉假阳性的关键——旧实现取"最后一个匹配节点"，会把用户自己的问句当回答交回去。
-    const before = typeof page.texts === 'function' ? await page.texts(site.answerSel).catch(() => []) : [];
+      const typed = await page.type(question);
+      if (typed === false) throw tagged('selector-stale', '输入未落进输入框，选择器可能过期。');
 
-    await site.send(page);
+      const beforeList = typeof page.texts === 'function' ? await page.texts(site.answerSel).catch(() => []) : [];
+      await site.send(page);
+      return beforeList;
+    };
 
-    let text = '';
-    try {
+    const waitAnswer = async (beforeList) => {
       if (typeof page.waitForNew === 'function') {
-        text = await page.waitForNew(site.answerSel, {
-          minCount: before.length + 1,
+        return page.waitForNew(site.answerSel, {
+          minCount: beforeList.length + 1,
           firstTokenMs: site.wait.firstTokenMs,
           stableMs: site.wait.stableMs,
           hardTimeoutMs: site.wait.hardTimeoutMs,
           isPending: typeof site.isPendingAnswer === 'function' ? site.isPendingAnswer : undefined,
           softTimeoutMs: site.wait.softTimeoutMs ?? 60000,
         });
-      } else {
-        await page.waitFor(site.answerSel, site.wait.firstTokenMs);
-        text = await page.waitStable(site.answerSel, site.wait);
       }
+      await page.waitFor(site.answerSel, site.wait.firstTokenMs);
+      return page.waitStable(site.answerSel, site.wait);
+    };
+
+    // 这条问题到底发出去了没有？判据取事实，而不是"我以为"：
+    //   ① 回答条数变多 → 已发出
+    //   ② 页面正文里能找到问句片段（用户气泡）→ 已发出
+    // 判不出来时一律当作**已发出**，绝不冒重复提问的风险。
+    const didPost = async (beforeList) => {
+      try {
+        if (typeof page.texts !== 'function') return true;
+        const now = await page.texts(site.answerSel).catch(() => []);
+        if (now.length > beforeList.length) return true;
+        const body = await page.texts('body').catch(() => []);
+        const flat = String((body || []).join(' ') || '').replace(/\s+/g, '');
+        const probe = String(question).replace(/\s+/g, '').slice(0, 8);
+        if (probe.length >= 4 && flat.includes(probe)) return true;
+        return false;
+      } catch {
+        return true;
+      }
+    };
+
+    const failAfterWait = (err) => {
+      if (!loggedIn) {
+        return tagged('not-logged-in', '未登录时未出现回答：该站可能需要先登录。请在「开登录窗」里手动登录一次后重试。');
+      }
+      return tagged(
+        'empty-answer',
+        `等待回答失败（首帧 ${site.wait.firstTokenMs}ms / 硬超时 ${site.wait.hardTimeoutMs}ms）：${err?.message ?? ''}`,
+      );
+    };
+
+    let before = await post();
+    let text = '';
+    try {
+      text = await waitAnswer(before);
     } catch (e) {
       if (e?.code === 'guest-dead') throw e;
-      if (!loggedIn) {
-        throw tagged('not-logged-in', '未登录时未出现回答：该站可能需要先登录。请在「开登录窗」里手动登录一次后重试。');
+      // 冷启动容错（2026-11-05 真机实测千问：桥重启后第一问 100% 首帧超时，第二问立刻正常）。
+      // 根因不是回答慢，而是"输入写进去了、Enter 没生效"——页面上既没有问句也没有新回答。
+      // 此时重发是**安全**的：不会把同一个问题发两遍，也不会污染对话。
+      const posted = await didPost(before);
+      if (posted) throw failAfterWait(e);
+
+      const residue =
+        typeof page.inputValue === 'function' ? await page.inputValue(site.inputSel).catch(() => '') : '';
+      if (residue && String(residue).trim()) {
+        // 框里还残留着上一条：只补一次发送，绝不重新输入（否则会变成"问题问题"）
+        log({ level: 'warn', msg: '首帧超时且未发出，输入框有残留，只补发送', site: site.id });
+        await site.send(page);
+      } else {
+        log({ level: 'warn', msg: '首帧超时且未发出（输入框已空），安全重发一次', site: site.id });
+        before = await post();
       }
-      throw tagged('empty-answer', `等待回答失败（首帧 ${site.wait.firstTokenMs}ms / 硬超时 ${site.wait.hardTimeoutMs}ms）：${e?.message ?? ''}`);
+      try {
+        text = await waitAnswer(before);
+      } catch (e2) {
+        if (e2?.code === 'guest-dead') throw e2;
+        throw failAfterWait(e2);
+      }
     }
 
     text = String(text ?? '').trim();
@@ -306,12 +375,20 @@ export function createDispatcher({ sites, driver, log = () => {} }) {
           return { ok: false, errorType: 'unknown', message: '当前驱动不支持 DOM 探测（Mock 驱动？）' };
         }
 
+        // 校准覆盖：允许本次探测临时换选择器（不写回站点定义）。
+        // 这是校准的关键手段——猜错的选择器会让人误以为"页面没有回答区"。
+        const sel = {
+          inputSel: opts.overrides?.inputSel || site.inputSel,
+          sendSel: opts.overrides?.sendSel || site.sendSel,
+          answerSel: opts.overrides?.answerSel || site.answerSel,
+        };
+
         // 先等页面 hydrate：SPA 的界面在 loadURL 之后才挂上，早探必假阴性
         const hydration =
           typeof page.waitHydrated === 'function'
             ? await page.waitHydrated({
                 timeoutMs: opts.hydrateTimeoutMs ?? 25000,
-                selector: site.inputSel, // 以"输入框真挂出来"为准，别拿字数猜
+                selector: sel.inputSel, // 以"输入框真挂出来"为准，别拿字数猜
               })
             : { hydrated: null, bodyLen: null, waitedMs: 0 };
 
@@ -322,9 +399,9 @@ export function createDispatcher({ sites, driver, log = () => {} }) {
         for (let i = 0; i < 8; i += 1) {
           attempts += 1;
           dom = await page.probeDom({
-            inputSel: site.inputSel,
-            sendSel: site.sendSel,
-            answerSel: site.answerSel,
+            inputSel: sel.inputSel,
+            sendSel: sel.sendSel,
+            answerSel: sel.answerSel,
           });
           const hit = (dom?.counts?.input ?? 0) > 0 || (dom?.counts?.answer ?? 0) > 0 || (dom?.counts?.send ?? 0) > 0;
           if (hit) break;
@@ -348,27 +425,34 @@ export function createDispatcher({ sites, driver, log = () => {} }) {
         const matched = {
           input: dom.counts?.input > 0,
           // sendSel 为空 = 该站靠回车发送（豆包实测如此），不算未命中
-          send: site.sendSel ? dom.counts?.send > 0 : true,
+          send: sel.sendSel ? dom.counts?.send > 0 : true,
           answer: dom.counts?.answer > 0,
         };
         // 提问前能验证的：输入框 + 发送方式 + 登录态
         const preflightOk = matched.input && matched.send && loggedIn;
+        // 只有三个选择器都在页面上真实命中，才算"校准通过"
+        // （原来这里 calibrated 被重复赋值两次，后者覆盖前者，顺手清掉）
+        const calibrated = matched.input && matched.send && matched.answer && loggedIn;
         return {
           ok: true,
           site: site.id,
           name: site.name,
           verified: !!site.verified,
           verifiedFields: site.verifiedFields ?? null,
+          // 回显本次真正用的选择器：用覆盖参数校准时，必须能确认覆盖生效
+          selectorsUsed: sel,
+          overridden: {
+            input: sel.inputSel !== site.inputSel,
+            send: sel.sendSel !== site.sendSel,
+            answer: sel.answerSel !== site.answerSel,
+          },
           loggedIn,
           matched,
           preflightOk,
-          // 完整校准要求回答区也命中——那必须真的问过一次才可能成立
-          calibrated: preflightOk && matched.answer,
+          calibrated,
           answerSelUnverified: !matched.answer,
           hydration,
           probeAttempts: attempts,
-          // 只有三个选择器都在页面上真实命中，才算"校准通过"
-          calibrated: matched.input && matched.send && matched.answer && loggedIn,
           captured,
           dom,
         };

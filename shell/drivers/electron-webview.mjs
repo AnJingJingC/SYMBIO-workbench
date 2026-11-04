@@ -117,6 +117,21 @@ export function createElectronDriver({ loadTimeoutMs = 60000, showPages = false,
         return true;
       },
       /** 取所有匹配节点的文本（用于"新回答 = 新增的那一条"，不靠猜） */
+      // 读输入框当前内容。用途：判断"上一条到底发出去了没有"。
+      // 冷启动时 type 能写进 textarea，但 Enter 可能不生效（千问实测），
+      // 重发前必须知道框里是空的还是残留着上一条，否则会变成"问题问题"。
+      async inputValue(sel) {
+        if (win.isDestroyed()) throw tagged('guest-dead', '窗口已销毁');
+        if (!sel) return '';
+        return run(
+          `(() => { try {
+             const el = document.querySelector(${js(sel)});
+             if (!el) return '';
+             if (typeof el.value === 'string') return el.value;
+             return (el.innerText || el.textContent || '') + '';
+           } catch (e) { return ''; } })()`,
+        );
+      },
       async texts(sel) {
         if (win.isDestroyed()) throw tagged('guest-dead', '窗口已销毁');
         if (!sel) return [];
@@ -200,6 +215,10 @@ export function createElectronDriver({ loadTimeoutMs = 60000, showPages = false,
         throw tagged('timeout', '等待期未取到任何文本');
       },
       /** 登录用：把网页窗口显示出来，让宿主手动登录（壳绝不代填账号/验证码）。 */
+      async isVisible() {
+        if (win.isDestroyed()) return false;
+        return win.isVisible();
+      },
       async setVisible(v) {
         if (win.isDestroyed()) throw tagged('guest-dead', '窗口已销毁');
         if (v) {
@@ -361,13 +380,53 @@ export function createElectronDriver({ loadTimeoutMs = 60000, showPages = false,
               } catch (e) { return null; }
             })();
 
-            // 页面上的所有 data-testid（找"助手消息"真实标记的最快路径）
+            // 页面上所有 data-testid（找"助手消息"真实标记的最快路径）
             const testIds = {};
             for (const el of allEls) {
               const t = el.getAttribute ? el.getAttribute('data-testid') : '';
               if (!t) continue;
               testIds[t] = (testIds[t] || 0) + 1;
             }
+
+            // 最内层文本块清单 —— 校准新站点时最有用的一项。
+            // 旧版探针只能验证"你猜的选择器对不对"，猜错就什么都看不到，
+            // 容易把"我猜错了"误判成"页面没有回答区"。这里改为直接列出页面上
+            // 所有承载正文的叶子容器（class / testid / 文本头），据此反推选择器。
+            const textBlocks = (() => {
+              try {
+                const out = [];
+                const seen = new Set();
+                for (const el of allEls) {
+                  const t = ((el.innerText || '') + '').trim();
+                  if (t.length < 20) continue;
+                  // 只留最内层：子节点里若已有一个承载了大部分文本，本节点就是外层容器
+                  let maxChild = 0;
+                  for (const c of el.children || []) {
+                    const ct = (((c.innerText || '') + '') || '').trim().length;
+                    if (ct > maxChild) maxChild = ct;
+                  }
+                  if (maxChild > t.length * 0.8) continue;
+                  const cls = String((el.getAttribute && el.getAttribute('class')) || '');
+                  const testid = (el.getAttribute && el.getAttribute('data-testid')) || '';
+                  // 注意：本段整块是外层模板字符串，内部禁止出现模板插值语法，
+                  // 否则会被当成外层求值，解析到主进程作用域里。
+                  const key = el.tagName + '|' + cls + '|' + testid + '|' + t.slice(0, 24);
+                  if (seen.has(key)) continue;
+                  seen.add(key);
+                  out.push({
+                    tag: el.tagName.toLowerCase(),
+                    cls: cls.slice(0, 70),
+                    testid,
+                    len: t.length,
+                    text: t.slice(0, 70).replace(/\s+/g, ' '),
+                  });
+                  if (out.length >= 30) break;
+                }
+                return out;
+              } catch (e) {
+                return [];
+              }
+            })();
 
             let shadowHosts = 0;
             let closedHosts = 0;
@@ -411,6 +470,7 @@ export function createElectronDriver({ loadTimeoutMs = 60000, showPages = false,
               answerNodes,
               lastReceiveTree,
               testIds,
+              textBlocks,
               bodyLen: body.length,
               bodyHead: body.slice(0, 300),
               loginHints: {

@@ -19,11 +19,15 @@ const SITE = {
   name: 'DeepSeek（网页端）',
   url: 'https://chat.deepseek.com/',
   partitionKey: 'webai-deepseek',
-  verified: false,
-  verifiedFields: { inputSel: false, send: false, answerSel: false },
-  verifiedNote: '未校准：选择器为合理猜测，真机 node probe-site.mjs 校准前不得用于真实问答',
+  verified: true,
+  verifiedFields: { inputSel: true, send: true, answerSel: true },
+  verifiedNote: '已校准（2026-11-05 真机）：probe calibrated:true（input=1/answer=1）；实问答 58 字、3.6s；发送方式=Enter（页面无独立发送按钮）',
 
-  inputSel: 'textarea#chat-input, div[contenteditable="true"].ProseMirror',
+  // 实测（2026-11-05，真机 Electron，已登录态）：输入框是**无 id 的 textarea**，
+  // class 为 "_27c9245 ds-scroll-area ds-scroll-area--show-on-focus-within"。
+  // 原猜测的 textarea#chat-input 不存在，导致"已登录也被判成未登录"——
+  // 因为 loggedIn() 用输入框存在与否作判据。改用实测类名，保留旧候选作后备。
+  inputSel: 'textarea.ds-scroll-area, textarea#chat-input, div[contenteditable="true"].ProseMirror',
   sendSel: '', // 未实测；先走回车（多数站点回车可发送）
   answerSel: '.ds-markdown',
 
@@ -41,9 +45,21 @@ const SITE = {
     return page.key('Enter');
   },
 
+  // 思考占位（与豆包 2026-11-04 事故同类）：生成期间回答区先出现「思考中」一类短文本，
+  // 它静止后会被误判成"已收敛"。占位不是答案，命中就继续等正文。
+  // 空文本不在此列——那属于 empty-answer 的语义，别抢归因。
+  isPendingAnswer(text) {
+    const t = String(text ?? '').replace(/\s+/g, '');
+    if (!t) return false;
+    if (t.length > 12) return false;
+    return /^(思考中|正在思考|正在生成|生成中|加载中|请稍等|分析中|检索中|搜索中|正在搜索)/.test(t);
+  },
+
   clean(text) {
-    // 未校准阶段：保守原样返回，不加任何截断规则（宁多留不误删）
-    return String(text ?? '').trim();
+    let t = String(text ?? '').trim();
+    // 深度思考模式的完成标记会作为单独一行混进正文
+    t = t.replace(/^已深度思考（用时\s*\d+\s*秒）\s*$/gm, '');
+    return t.replace(/\n{3,}/g, '\n\n').trim();
   },
 
   // 未校准：等待参数放宽，实测后再收紧
