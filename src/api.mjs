@@ -12,7 +12,7 @@ import { listTools, runTool } from './tools.mjs';
 
 export const API_PREFIX = '/api/symbio';
 export const DEFAULT_DATA_ROOT = 'E:/SYMBIO';
-export const VERSION = '0.3.5';
+export const VERSION = '0.3.6';
 
 // 「设计清单」：只用来核对资产是否齐全，不代表当前读到的实时状态。
 // 面板上的实时数量一律取 /state 的 assets；数据源不可读时显示「—」并说明原因。
