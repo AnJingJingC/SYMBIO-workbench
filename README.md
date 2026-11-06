@@ -1,13 +1,17 @@
 # SYMBIO 工作台 · DSH Desktop 业务面板（v0.5.0）
 
-把 `E:/SYMBIO` 的六层记忆、12 个技能、15 个本机工具（面板可点 6 个）、**三层库（共享技能 / 零件 / 项目台账）** 与免费 AI 桥，挂进 `dataelement/dsh-desktop` 的**四处宿主座位**。两个场景：**知识消化**（资料 → 可检索知识卡片）与 **深度调研**（问题 → 有证据的答案），跨场景派单走文件总线 + 命令路由。
+DSH Desktop 的一个工作台插件：**把「你在 DSH 里做的事」摆到四个能看见的地方**——业务面板、右下角常驻状态条、左侧栏入口、协同总览页。装一次，四处同时亮。
+
+在主面板里，长文进 → 六层记忆消化 → 出可检索的知识卡片；另一个场景「深度调研」走同一条链路，问题进 → 有证据的答案出，跨场景派单走文件总线 + 命令路由。
+
+能力来自工作台根目录（默认 `E:/SYMBIO`，可用环境变量 `SYMBIO_HOME` 改）：六层记忆、12 个技能、15 个本机工具（面板可点 6 个）、**三层库（共享技能 / 零件 / 项目台账）** 与免费 AI 桥。
 
 - **业务面板**占左侧 60%，**右侧对话完全复用宿主原生 UI**；顶部状态栏吸顶常驻
 - **常驻状态条**（`shell.overlay`）：右下角一条胶囊，跨页可见，**不可点击、不挡任何宿主按钮**
 - **协同总览页**（`sidebar.panellist` + `main`）：侧栏一个准星入口，点开是全局视图——谁在干活、机器扛不扛得住、三层库长什么样
-- 安装：宿主 `install_local_workbench({ path: "<本包>.tgz", replace: true })`，返回 `applied` **并重启 Harness** 才真正接管（详见 `INSTALL-PROMPT.txt`）
+- 安装：宿主 `install_local_workbench({ path: "<本包>.tgz", replace: true })`，返回 `applied` **并重启 Harness** 才真正接管（详见 `INSTALL-PROMPT.txt`）；包可直接下载，见下文「安装」
 - 身份：本地安装时由宿主派生为 `local:symbio-workbench`；`repository` 已指向本仓库，供市场索引溯源
-- **只读**：面板不写入、不迁移、不复制 `E:/SYMBIO` 的任何业务数据
+- **只读**：面板不写入、不迁移、不复制工作台根下的任何业务数据
 
 ---
 
@@ -159,10 +163,10 @@ https://github.com/AnJingJingC/SYMBIO-workbench/raw/main/symbio-workbench-0.5.0.
 仓库根的 `.tgz` 只放**当前版本**一个（旧版本会让人装到比源码旧的包）；`node tools/sync-publish.mjs` 同步时会核对包内
 `package.json` 的版本与源码是否一致，并在根上出现旧版本包时报警。
 
-伴生桥（可选，不启动面板也能用）：
+伴生桥（可选，不启动面板也能用；路径换成你的工作台根）：
 
 ```sh
-cd E:/SYMBIO/shell && npm run bridge
+cd "$SYMBIO_HOME/shell" && npm run bridge     # 默认 SYMBIO_HOME=E:/SYMBIO
 ```
 
 ## 还没做的 / 诚实边界
