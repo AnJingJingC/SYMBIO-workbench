@@ -125,10 +125,99 @@ async function bridgeAsk(question) {
   return { status: res.status, ok: res.ok && data.ok !== false, data };
 }
 
+// ── 归属自检 ────────────────────────────────────────────────────────────────
+// 真机踩过：上一轮 6 段合并刚结束 17 秒就发下一篇，桥把**上一条回答**返回了这一条。
+// 内容套在错材料上，标题写「外壳路线评估」、来源写「免费网页AI桥」，而命令行返回 ok。
+// 这是最难自查的一类错——卡片看起来完整、格式也对，只是挂错了材料。
+// 两道检查：① 与上一条回答的字符二元组重合度 ② 材料里的专名/数字在回答里的命中数。
+const STATE = path.join(INBOX, '.last-reply.json');
+
+function grams(t) {
+  const s = String(t).replace(/\s+/g, '');
+  const set = new Set();
+  for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));
+  return set;
+}
+
+function jaccard(a, b) {
+  const A = grams(a);
+  const B = grams(b);
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const g of A) if (B.has(g)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+// 材料里的「独特记号」：只留**低频**英文标识符与数字（出现 ≤2 次）。
+// 通用词（ai / api / dsh / http）在文中反复出现，自然被滤掉；专名（shell.overlay）
+// 和版本号（0.1.3）只出现一两次，留下。实测：错配的卡在这道闸上命中 0，同材料的卡命中 1-2。
+function anchors(t) {
+  const raw = [...String(t).matchAll(/[A-Za-z][A-Za-z0-9_.\-]{3,}|\d+\.\d+[\.\d]*|\d{4,}/g)].map((m) =>
+    m[0].toLowerCase()
+  );
+  const cnt = new Map();
+  for (const w of raw) cnt.set(w, (cnt.get(w) || 0) + 1);
+  const out = new Set();
+  for (const [w, c] of cnt) if (c <= 2 && w.length >= 4) out.add(w);
+  return out;
+}
+
+async function lastReply() {
+  try {
+    return JSON.parse(await fs.readFile(STATE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function rememberReply(source, text) {
+  try {
+    await fs.writeFile(STATE, JSON.stringify({ source, at: Date.now(), text: String(text).slice(0, 3000) }));
+  } catch (e) {
+    // 写不进去就等于「永远没有上一条可比较」——串线检测会悄悄退化成只剩锚点这一道。
+    // 测试时踩过：传错 fs 模块，写入静默失败，四场景里唯一该被抓住的那条漏了。
+    log('上一轮回答状态写不进去，串线检测退化（只剩锚点检查）：', e.message);
+  }
+}
+
+// 结构闸：真机里 6 段合并那一次，桥无视了 prompt，输出 5 段裸文字，没有任何小节。
+// 这种卡能读但不是卡（索引里没有可跳转的小节，渲染出来一大坨）。落库前拦掉。
+function checkShape(reply) {
+  const n = (String(reply).match(/^##\s+\S/gm) || []).length;
+  if (n < 2) return `输出没有小节结构（## 只有 ${n} 个），不像卡片`;
+  return null;
+}
+
+async function checkAttribution(reply, body, source) {
+  const prev = await lastReply();
+  // 同一份材料重跑时内容本来就该像，不能当成串线
+  if (prev?.text && prev.source !== source) {
+    const j = jaccard(reply, prev.text);
+    if (j > 0.5) return `与上一条回答高度重合（${j.toFixed(2)}，上一条是 ${prev.source}）`;
+  }
+  const a = anchors(body);
+  if (a.size >= 10) {
+    const low = String(reply).toLowerCase();
+    let hit = 0;
+    for (const t of a) if (low.includes(t)) hit++;
+    if (hit === 0) return `回答里没有任何材料独有的专名/版本号（稀有锚点 ${a.size} 个，命中 0）`;
+  }
+  return null;
+}
+
+// prompt 里必须把 markdown 的井号写出来。只写「依次有小节：一句话结论 / 要点 …」时，
+// 桥会输出成裸文本行 —— 卡片渲染出来是四大段糊在一起，要点也没有列表符号。
+// 真机踩过：卡片能读，但不像卡片。
+const CARD_SHAPE =
+  `③ 小节必须用二级标题，依次是：## 一句话结论 / ## 要点 / ## 值得记的原文片段 / ## 标签；` +
+  `「## 要点」下面每条以「- 」开头，一行一条，≤5 条；` +
+  `「## 值得记的原文片段」直接抄原文金句，每条以「- 」开头；` +
+  `「## 标签」写 2-4 个以 # 开头的词，不用列表符号。`;
+
 const DIGEST_PROMPT = (title) =>
   `请把下面的材料消化成一张知识卡片，严格满足：① 总字数 ≤1200 字；② 第一行是「# <卡片标题>」，` +
   `标题要一句话说清这是什么（别照抄文件名）；` +
-  `③ 依次有小节：一句话结论 / 要点（≤5条）/ 值得记的原文片段 / 标签（#开头，2-4个）。` +
+  CARD_SHAPE +
   `不要输出卡片以外的任何话。材料标题：「${title}」。\n\n材料正文：\n`;
 
 // 入料文件名 → 卡片标题。
@@ -139,6 +228,38 @@ const cardTitle = (name) =>
 
 // 桥不知道「来源 / 摄入时间 / 密级」，让它编就是造假。这三行由代码补真实值，
 // 桥只管正文。技能规范与 index-build 的 META_PREFIX 都按这四行对齐。
+// 桥不一定每次都听话。prompt 要求了「## 小节」和「- 条目」，但真机里它给过裸文本小节、
+// 也把要点写成四大段。这里只补**格式符号**，不动一个字：小节名补 ##、要点段里的裸行补 -。
+// 判断标准很窄（整行恰好等于小节名），不会误伤正文里提到「要点」的句子。
+const SECTIONS = ['一句话结论', '要点', '值得记的原文片段', '标签'];
+const BULLET_SECTIONS = ['要点', '值得记的原文片段'];
+
+function normalizeSections(lines) {
+  const out = lines.map((l) => {
+    const t = l.trim();
+    if (!t || /^#{1,6}\s/.test(t)) return l;
+    const hit = SECTIONS.find((s) => t === s || t === `${s}：` || t === `${s}:`);
+    return hit ? `## ${hit}` : l;
+  });
+
+  // 在要点/片段段内，整段都是裸行（一条列表符号都没有）时逐行补「- 」
+  for (let i = 0; i < out.length; i++) {
+    if (!/^##\s/.test(out[i].trim())) continue;
+    const sec = out[i].trim().replace(/^##\s+/, '');
+    if (!BULLET_SECTIONS.includes(sec)) continue;
+    let j = i + 1;
+    while (j < out.length && !/^##\s/.test(out[j].trim())) j++;
+    const body = [];
+    for (let k = i + 1; k < j; k++) if (out[k].trim()) body.push(k);
+    if (body.length < 2) continue; // 单行不当列表（可能是「—」或一句总结）
+    const anyBullet = body.some((k) => /^\s*[-*+]\s|^\s*\d+[.)]\s/.test(out[k]));
+    if (anyBullet) continue; // 桥已经给了列表，别重复加
+    for (const k of body) out[k] = `- ${out[k].trim()}`;
+    i = j - 1;
+  }
+  return out;
+}
+
 function withMeta(markdown, { source, at, level, fallbackTitle }) {
   const lines = String(markdown).trim().split('\n');
   let head = `# ${fallbackTitle}`;
@@ -151,7 +272,7 @@ function withMeta(markdown, { source, at, level, fallbackTitle }) {
     // 标题会被误判成有序列表，结果桥给的好标题被留在正文里当第一行。
     head = `# ${lines.shift().trim()}`;
   }
-  return [head, '', `- 来源：${source}`, `- 摄入时间：${at}`, `- 密级：${level}`, '', ...lines]
+  return [head, '', `- 来源：${source}`, `- 摄入时间：${at}`, `- 密级：${level}`, '', ...normalizeSections(lines)]
     .join('\n')
     .replace(/\n{3,}/g, '\n\n');
 }
@@ -190,9 +311,9 @@ const POINTS_PROMPT = (title, i, n) =>
   `保留具体数字、专有名词与结论。不要写标题、不要写总结、不要输出别的任何话。\n\n段落：\n`;
 
 const MERGE_PROMPT = (title) =>
-  `下面是同一篇材料《${title}》分段提取的要点。请合并成一张知识卡片，严格满足：` +
+  `下面是同一篇材料《${title}》分段提取的要点。请合并成**一张知识卡片**（注意：是卡片，不是要点列表），严格满足：` +
   `① 总字数 ≤1200 字；② 第一行是「# <卡片标题>」，标题一句话说清这是什么；` +
-  `③ 依次有小节：一句话结论 / 要点（≤5条）/ 值得记的原文片段（没有就写「—」）/ 标签（#开头，2-4个）；` +
+  CARD_SHAPE.replace('③ ', '') +
   `④ 去重、按重要性排序，不要出现「第几段」这类分段痕迹。不要输出卡片以外的任何话。\n\n`;
 
 async function processFile(file) {
@@ -266,21 +387,67 @@ async function processFile(file) {
     return ans;
   };
 
-  let reply;
-  try {
+  // 整篇消化（含多段）。
+  const digest = async () => {
     if (chunks.length === 1) {
-      reply = await ask(DIGEST_PROMPT(title) + outbound, `桥消化 ${name}（${SITE}）`);
-    } else {
-      log(`材料 ${body.length} 字，分 ${chunks.length} 段消化后合并`);
-      const pts = [];
-      for (let i = 0; i < chunks.length; i += 1) {
-        pts.push(await ask(POINTS_PROMPT(title, i + 1, chunks.length) + chunks[i], `分段 ${i + 1}/${chunks.length}（${SITE}）`));
-      }
-      reply = await ask(
-        MERGE_PROMPT(title) + pts.map((p, i) => `【第 ${i + 1} 段要点】\n${p}`).join('\n\n'),
-        `合并 ${chunks.length} 段（${SITE}）`
-      );
+      return ask(DIGEST_PROMPT(title) + outbound, `桥消化 ${name}（${SITE}）`);
     }
+    log(`材料 ${body.length} 字，分 ${chunks.length} 段消化后合并`);
+    const pts = [];
+    for (let i = 0; i < chunks.length; i += 1) {
+      pts.push(await ask(POINTS_PROMPT(title, i + 1, chunks.length) + chunks[i], `分段 ${i + 1}/${chunks.length}（${SITE}）`));
+    }
+    return ask(
+      MERGE_PROMPT(title) + pts.map((p, i) => `【第 ${i + 1} 段要点】\n${p}`).join('\n\n'),
+      `合并 ${chunks.length} 段（${SITE}）`
+    );
+  };
+
+  // 落卡前两道自检：归属（是不是挂错了材料）+ 结构（像不像一张卡）。
+  // 两道都靠重试兜——串线和格式塌陷都是桥的偶发行为，重跑一次通常就好。
+  //
+  // 来源要写**归档后**的路径。原来写 memory/50-inbox/<name>，而这个文件在落卡成功后
+  // 立刻被移到 _done/ —— 卡片上那行路径当场失效，三天后想回原文就找不到。
+  // 卡片一半的价值是「能回到出处」，所以这里必须写最终位置。
+  const src = `memory/50-inbox/_done/${name}`;
+  const compose = (raw) =>
+    withMeta(raw.length > 4000 ? raw.slice(0, 4000) : raw, {
+      source: src,
+      at: stamp(),
+      level,
+      fallbackTitle: title,
+    });
+
+  let reply;
+  let composed = '';
+  const selfCheck = async () => {
+    const bad = [];
+    const a = await checkAttribution(reply, outbound, name);
+    if (a) bad.push(`归属：${a}`);
+    // 结构闸必须判**规范化之后**的正文：桥会把 markdown 的「##」吃掉（实测稳定复现），
+    // 但小节名、逐条要点、原文、标签都在，normalizeSections 能补回来。判原始输出会误杀。
+    composed = compose(reply);
+    const s = checkShape(composed);
+    if (s) bad.push(`结构：${s}`);
+    return bad;
+  };
+
+  try {
+    reply = await digest();
+    let bad = await selfCheck();
+    if (bad.length) {
+      log(`自检未通过（${bad.join('；')}）；3 秒后整篇重跑一次`);
+      await new Promise((r) => setTimeout(r, 3000));
+      reply = await digest();
+      bad = await selfCheck();
+      if (bad.length) {
+        log(`重跑仍未通过（${bad.join('；')}）→ 进 _failed：宁可不动，也不落一张挂错材料或结构坏掉的卡`);
+        await move(file, FAILED);
+        return;
+      }
+      log('重跑后自检通过');
+    }
+    await rememberReply(name, reply);
   } catch (e) {
     const n = await bumpFail(name);
     if (n >= MAX_FAILS) {
@@ -298,13 +465,11 @@ async function processFile(file) {
     await beatHere('card', `落卡 ${name}`);
     const intakePath = await toolPath('intake.mjs');
     const intake = await import(pathToFileURL(intakePath).href);
-    const trimmed = reply.length > 4000 ? reply.slice(0, 4000) : reply; // intake 上限内交给它判定
-    const src = `memory/50-inbox/${name}`;
     card = await intake.runIntake({
       root: ROOT,
       title,
       source: src,
-      body: withMeta(trimmed, { source: src, at: stamp(), level, fallbackTitle: title }),
+      body: composed,
     });
     if (!card.ok) throw new Error(card.message ?? card.errorType ?? 'intake 拒绝');
   } catch (e) {
