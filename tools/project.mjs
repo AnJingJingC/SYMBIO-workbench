@@ -257,7 +257,12 @@ export async function addDeliverable({ name, item, file = '', note = '', rootDir
   if (text.includes('| （暂无） | — | — | 用 `project.mjs deliver` 追加 |')) {
     text = text.replace('| （暂无） | — | — | 用 `project.mjs deliver` 追加 |', row);
   } else {
-    text = text.replace(/(\n## 里程碑)/, `\n${row}$1`);
+    // 必须插在「表格最后一行之后」，不能插在「## 里程碑 之前」——后者中间还有个空行，
+    // 会把行插到空行之后，Markdown 当场截断表格（2026-11-07 真机踩到）。
+    const idx = text.indexOf('\n## 里程碑');
+    if (idx < 0) return { ok: false, message: '项目卡里找不到「## 里程碑」段，无法定位交付物表' };
+    const head = text.slice(0, idx).replace(/\n+$/, '');
+    text = `${head}\n${row}\n${text.slice(idx)}`;
   }
   await fs.writeFile(found.file, text, 'utf8');
   await rebuildIndex({ rootDir: home });
