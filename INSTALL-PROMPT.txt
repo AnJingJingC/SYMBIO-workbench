@@ -2,6 +2,8 @@
 
 【已知事实，不要重新开发、不要改包内容】
 - 包路径：E:/SYMBIO/workbench/symbio-workbench-0.5.0.tgz（当前版本：v0.5.0）
+  若本机没有这个文件（比如你是从仓库拿到的），先下载再装，然后把下面第 2 步的 path 换成实际路径：
+  https://github.com/AnJingJingC/SYMBIO-workbench/raw/main/symbio-workbench-0.5.0.tgz
 - 上一版是 v0.4.0（单业务面板）。本次是覆盖同名工作台，请用 **replace: true**
 - 宿主状态里应已有 local:symbio-workbench；若显示更早版本，以宿主实际状态为准，不要从文档推断
 - 已完成校验：`node --check`（服务端+客户端）全过；**契约 40/40 通过**（含三处座位的接入形状、

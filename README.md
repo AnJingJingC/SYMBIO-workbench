@@ -150,6 +150,15 @@ pnpm pack          # → symbio-workbench-0.5.0.tgz
 安装被宿主唯一授权给 Plugin Manager（`install_local_workbench` → `installBundle`），外部 Agent 不能代做。
 把 `INSTALL-PROMPT.txt` 全文粘进 DSH Desktop 新会话即可。同名升级用 `replace: true`；**只有 `application === 'applied'` 算生效**。
 
+包可以直接下载，不必 clone 后自己 pack：
+
+```
+https://github.com/AnJingJingC/SYMBIO-workbench/raw/main/symbio-workbench-0.5.0.tgz
+```
+
+仓库根的 `.tgz` 只放**当前版本**一个（旧版本会让人装到比源码旧的包）；`node tools/sync-publish.mjs` 同步时会核对包内
+`package.json` 的版本与源码是否一致，并在根上出现旧版本包时报警。
+
 伴生桥（可选，不启动面板也能用）：
 
 ```sh
