@@ -1,11 +1,42 @@
-# SYMBIO 工作台 · DSH Desktop 业务面板（v0.4.0）
+# SYMBIO 工作台 · DSH Desktop 业务面板（v0.5.0）
 
-把 `E:/SYMBIO` 的六层记忆、12 个技能、15 个本机工具（面板可点 6 个）、**三层库（共享技能 / 零件 / 项目台账）** 与免费 AI 桥，挂进 `dataelement/dsh-desktop` 的一块业务面板。两个场景：**知识消化**（资料 → 可检索知识卡片）与 **深度调研**（问题 → 有证据的答案），跨场景派单走文件总线 + 命令路由。
+把 `E:/SYMBIO` 的六层记忆、12 个技能、15 个本机工具（面板可点 6 个）、**三层库（共享技能 / 零件 / 项目台账）** 与免费 AI 桥，挂进 `dataelement/dsh-desktop` 的**四处宿主座位**。两个场景：**知识消化**（资料 → 可检索知识卡片）与 **深度调研**（问题 → 有证据的答案），跨场景派单走文件总线 + 命令路由。
 
-- 业务面板在左 60%，**右侧对话完全复用宿主原生 UI**；顶部状态栏吸顶常驻
-- 安装：宿主 `install_local_workbench({ path: "<本包>.tgz", replace: true })`，返回 `applied` 即生效（详见 `INSTALL-PROMPT.txt`）
+- **业务面板**占左侧 60%，**右侧对话完全复用宿主原生 UI**；顶部状态栏吸顶常驻
+- **常驻状态条**（`shell.overlay`）：右下角一条胶囊，跨页可见，**不可点击、不挡任何宿主按钮**
+- **协同总览页**（`sidebar.panellist` + `main`）：侧栏一个准星入口，点开是全局视图——谁在干活、机器扛不扛得住、三层库长什么样
+- 安装：宿主 `install_local_workbench({ path: "<本包>.tgz", replace: true })`，返回 `applied` **并重启 Harness** 才真正接管（详见 `INSTALL-PROMPT.txt`）
 - 身份：本地安装时由宿主派生为 `local:symbio-workbench`；`repository` 已指向本仓库，供市场索引溯源
 - **只读**：面板不写入、不迁移、不复制 `E:/SYMBIO` 的任何业务数据
+
+---
+
+## 四处座位是怎么来的
+
+前三个不是猜的，是 `seat-probe/` 探针包在真机上逐条验过的（2026-11-05，四行全 `ok:true`）：
+
+| 座位 | 用途 | 本版怎么用 |
+|---|---|---|
+| `desktopWorkbenches` | 业务面板（宿主封装，单槽） | 知识消化工作台，能力不变 |
+| `shell.overlay`（list） | 全帧浮层，跨页常驻 | 常驻状态条：亮灯 / 负载 / 待办 |
+| `sidebar.panellist`（list） | 侧栏图标 | 「协同总览」入口 |
+| `main`（keyed） | 中央面板，按侧栏 id 选择 | 协同总览页，key 与上者同名 |
+
+**两条形态限制，别误解：**
+
+1. **`main` 是切换，不是同屏。** 点侧栏入口会把中央区换成总览页，业务面板不在了（真机实测 `panelProbe` 同时转 `false`）。真同屏要另找 dockkit 浮动面板。
+2. **常驻状态条不可交互。** overlay 是全帧表面，`pointer-events` 恒为 `none` —— 一条状态条绝不该让宿主自己的按钮点不动。所以它只放三件「一眼读完」的事，不放按钮。
+
+接入形状（`ctx.slots` 直接读会抛 `cannot get property "slots" without inject`，必须走门面）：
+
+```js
+const slots = ctx.get('slots')                       // 免声明查询
+slots.inject('shell.overlay', () => slots.register({ name: 'shell.overlay', id: 'symbio-status', order: 900 }, StatusBar))
+slots.inject('sidebar.panellist', () => slots.register({ name: 'sidebar.panellist', id: 'symbio-overview', order: 900 }, SceneEntry))
+slots.inject('main', () => slots.register({ name: 'main', key: 'symbio-overview' }, OverviewPage))  // keyed 用 key
+```
+
+拿不到 `slots` 时**只降级这三处附加座位，业务面板照旧挂载** —— 这条路径有测试锁（`test/contract.test.mjs`）。
 
 ---
 
@@ -73,7 +104,7 @@ src/api.mjs           路由、桥探测、请求体兼容读取
 src/state.mjs         业务状态只读解析器（逐文件容错，issues 不编造；含三层库与活动心跳）
 src/tools.mjs         6 个白名单工具的受限运行器（/load 也复用它，不另开口子）
 lib/client.js         __ModuleLoader__.load + desktopWorkbenches.register，React 面板（含亮灯/负载胶囊/库区块）
-test/                 契约 / 解析 / 降级 / 转发 / 标识符遮蔽回归 / 无头渲染冒烟 / 亮灯 TTL / 负载失败态，共 28 项
+test/                 契约 / 解析 / 降级 / 转发 / 标识符遮蔽回归 / 无头渲染冒烟 / 亮灯 TTL / 负载失败态，共 39 项
 INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ```
 
@@ -90,8 +121,8 @@ INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ## 校验与打包
 
 ```sh
-npm run verify     # 4 文件语法检查 + 28 项自测（全绿才可发布）
-pnpm pack          # → symbio-workbench-0.4.0.tgz
+npm run verify     # 5 文件语法检查 + 39 项自测（全绿才可发布）
+pnpm pack          # → symbio-workbench-0.5.0.tgz
 ```
 
 ## 安装
@@ -108,12 +139,12 @@ cd E:/SYMBIO/shell && npm run bridge
 ## 还没做的 / 诚实边界
 
 - **工具箱接入宿主 Agent**：dsh-desktop 工作台契约只给「面板 + `/api/symbio/*` 路由」，`DshClientManifest.inject` 明确「不是 Cordis 服务注入」，**没有**宿主 Agent 工具注册服务。但 12 个技能中已有 10 个通过 `node tools/*.mjs` 在对话间接触发这些工具，且本版把工具箱做成 `GET /api/symbio/tools` 机器可读清单 + `POST /api/symbio/tools/run` 可调用面（详见 `docs/工具箱-宿主Agent接入.md`）。要更严格的「Agent 原生工具」集成，需等 dsh-desktop 开放对应契约。
-- **多面板 / 多场景同屏 —— 上一版的说法是错的，本版更正**：宿主并非"只给一块面板"。开源 `dsh-client-ui-layout` 的 SlotMap 里，`sidebar.panellist`（list）+ `main`（keyed）就是官方多面板机制，`conversation` 只是 `main` 的一个 key。我们此前只用了 `desktopWorkbenches.register` 这个单槽封装。**但这条路径尚未真机验证**（`ctx.uiRenderer` 在 Desktop 上下文是否可达、`list id` 与 `main` key 是否必须同名，都只能靠一次小样验证回答）。详见 `memory/90-archive/evolve/2026-11-05-宿主席位-报告.md`。
+- **多面板：从「未验证」到「已实测」（v0.5.0 更新）**：`sidebar.panellist`（list）+ `main`（keyed）确为官方多面板机制，已由座位探针 0.1.3 在真机逐条验证四行全 `ok:true`，本版据此接上常驻状态条与协同总览页。**但仍有一条限制**：`main` 是按 key **切换**中央面板，不是同屏并列——点开总览页时业务面板会被替换。真同屏要另找 `dockkit` 浮动面板（其 `.d.ts` 不在开源 npm 包内，仍需真机试）。证据见 `reports/座位探针-验收定稿.json` 与 `docs/外壳路线评估.md`。
 - **`rightbar` 不能用**：它已被宿主右栏占用（契约原文 "OCCUPIED by the right Sidebar"），注册会**替换**右栏而不是并排——而且不会报错。同理 `root` 明令禁止注册（会 shadow 整个 frame）。
 - 桥的登录态长期稳定性未验收（需手动登录一次后复验；cookie 存在站点分区里，重启桥不丢）
 - 四个站点（豆包 / DeepSeek / 通义千问 / 智谱）**已全部真机校准** `verified: true`。注意网页 AI 随时改版，选择器失效时用 `node probe-site.mjs <site> --input/--answer <候选>` 现场重试，不要靠改代码猜。
 
-## 分发与市场收录（v0.4.0 定案）
+## 分发与市场收录（v0.5.0 定案）
 
 本仓库（`AnJingJingC/SYMBIO-workbench`）就是这个工作台的源码与发行仓：仓库根 = 包本体（`package.json`/`dsh`/`src`/`lib`），配套 `tools`/`shell`/`docs`/`config`/`.dsh/skills` 一并公开；`memory/` 属个人数据，**不入库**。
 

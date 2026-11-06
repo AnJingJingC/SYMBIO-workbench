@@ -1,6 +1,6 @@
 {
   "name": "symbio-workbench",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "SYMBIO 协同进化工作台 · 单主场景「知识消化」。把六层记忆、通用技能与免费 AI 桥挂进 DSH Desktop 的一块业务面板。",
   "type": "module",
   "main": "./dsh/index.mjs",

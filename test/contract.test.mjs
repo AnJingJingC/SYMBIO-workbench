@@ -463,3 +463,256 @@ test('面板：亮灯与负载两个胶囊都在顶栏，且拓扑能接收活�
   assert.ok(src.includes('/api/symbio/activity'), '亮灯必须接 /activity')
   assert.ok(src.includes('/api/symbio/load'), '负载胶囊必须接 /load')
 })
+
+// ── 三处宿主座位（2026-11-05 由座位探针 0.1.3 真机验证开放）─────────────
+// 这组测试锁的是「接入形状」，不是「长得好看」。形状错了在真机上表现为
+// register-threw / no-slots，而报告里只会说一句「不通」，很难回溯——所以锁在这里。
+
+/** 用桩 React + 桩宿主上下文求值 client.js，返回注册过程的可观测结果。 */
+function makeHarness({ slots = true, get = true } = {}) {
+  const src = readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8')
+  const ReactStub = {
+    createElement: (type, props, ...kids) =>
+      typeof type === 'function' ? type(props || {}) : { type, props, kids },
+    useState: (init) => [typeof init === 'function' ? init() : init, () => {}],
+    useEffect: () => {},
+    useCallback: (fn) => fn,
+    useRef: (v) => ({ current: v }),
+  }
+  let mod = null
+  const windowStub = { __ModuleLoader__: { load: (m) => { mod = m } } }
+  const documentStub = {
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: () => ({ dataset: {}, style: {}, textContent: '' }),
+    head: { appendChild: () => {} },
+  }
+  const requireStub = (name) => {
+    if (name === 'react') return ReactStub
+    throw new Error(`客户端意外依赖 ${name}`)
+  }
+  new Function('window', 'document', 'require', src)(windowStub, documentStub, requireStub)
+  const api = mod.factory(requireStub)
+
+  const calls = { inject: [], register: [], panels: [] }
+  const slotsStub = {
+    inject(name, cb) { calls.inject.push(name); cb(); return () => {} },
+    register(opts, Comp) { calls.register.push({ opts, comp: Comp && Comp.name }); return () => {} },
+  }
+  const ctx = {
+    effect: (fn) => fn(),
+    desktopWorkbenches: {
+      register: (_meta, Panel) => { calls.panels.push(Panel); return () => {} },
+    },
+  }
+  if (get) ctx.get = (name) => (name === 'slots' && slots ? slotsStub : undefined)
+
+  const dispose = api.apply(ctx)
+  return { api, calls, slotsStub, dispose }
+}
+
+test('三处座位按官方契约注册：list 用 id、keyed 用 key、id 与 key 同名', () => {
+  const { calls } = makeHarness()
+  assert.deepEqual(calls.inject, ['shell.overlay', 'sidebar.panellist', 'main'],
+    '三个座位都要先 inject 再 register（顺序即优先级）')
+
+  const by = Object.fromEntries(calls.register.map((r) => [r.opts.name, r.opts]))
+  assert.deepEqual(by['shell.overlay'], { name: 'shell.overlay', id: 'symbio-status', order: 900 })
+  assert.ok(by['sidebar.panellist'] && by['sidebar.panellist'].id, 'list 座位必须有 id')
+  assert.equal(by['sidebar.panellist'].id, by.main.key,
+    'main 是 keyed、由侧栏 id 选择，两者必须同名 —— 否则点了入口出不来页')
+  assert.ok(by.main && typeof by.main.key === 'string' && by.main.key.length > 0,
+    'main 必须用 key，不能用 id')
+  assert.equal(by.main.id, undefined, 'main 传 id 无效，只能传 key')
+})
+
+test('拿不到 slots 时只降级附加座位，业务面板照旧挂载', () => {
+  const { calls } = makeHarness({ slots: false })
+  assert.equal(calls.panels.length, 1, '业务面板必须照常注册')
+  assert.deepEqual(calls.inject, [], '没有 slots 就不该硬试 inject')
+  assert.deepEqual(calls.register, [], '没有 slots 就不该 register')
+})
+
+test('宿主不提供 ctx.get 时不得抛错（老宿主 / 门面缺失）', () => {
+  const { calls } = makeHarness({ get: false })
+  assert.equal(calls.panels.length, 1, '业务面板必须照常注册')
+  assert.deepEqual(calls.inject, [])
+})
+
+test('单个座位 register 抛错不牵连其它座位与业务面板', () => {
+  const src = readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8')
+  // 只锁行为约定：每个座位各自 try/catch，不是一把 try 包三处
+  assert.ok(/const seat = \(name, opts, Comp\) => \{\s*try/.test(src.replace(/\r/g, '')),
+    '三个座位必须各走一次 try，一处失败不能吞掉其余两处')
+  assert.ok(src.includes("console.warn(`[symbio] 座位 ${name} 注册失败"),
+    '座位注册失败必须留痕，不能静默')
+})
+
+test('重复 apply 不重复注册（宿主会重放同一个客户端的 apply）', () => {
+  const { api, calls } = makeHarness()
+  const before = { ...calls, register: calls.register.length, panels: calls.panels.length }
+  // 用一个全新的宿主上下文再 apply 一次，模拟宿主重放
+  const calls2 = { inject: [], register: [], panels: [] }
+  const slots2 = { inject(n, cb) { calls2.inject.push(n); cb(); return () => {} }, register(o, C) { calls2.register.push({ opts: o, comp: C && C.name }); return () => {} } }
+  api.apply({
+    effect: (fn) => fn(),
+    desktopWorkbenches: { register: () => { calls2.panels.push(1); return () => {} } },
+    get: () => slots2,
+  })
+  assert.equal(before.panels, 1)
+  assert.equal(calls2.panels.length, 0, '第二次 apply 不得再注册业务面板（会抛 Duplicate）')
+  assert.deepEqual(calls2.inject, [], '第二次 apply 不得再碰座位')
+})
+
+test('客户端绝不直接读 ctx.slots（Cordis Proxy 会抛 without inject）', () => {
+  const src = readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8').replace(/\r/g, '')
+  // 允许出现在注释里，但不允许出现在可执行代码里
+  const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
+  assert.ok(!/ctx\s*\.\s*slots/.test(code), '不得写 ctx.slots —— 未在 inject 声明时会抛错')
+  assert.ok(/ctx\?\.get\('slots'\)|ctx\.get\('slots'\)/.test(code), '必须走门面的 ctx.get(\'slots\')')
+})
+
+test('常驻状态条不得拦截宿主点击（pointerEvents 恒为 none）', () => {
+  const src = readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8')
+  const block = src.slice(src.indexOf('function StatusBar()'), src.indexOf('function SceneEntry'))
+  assert.ok(/pointerEvents:\s*'none'/.test(block), 'overlay 是全帧表面，状态条必须 pointer-events:none')
+  assert.ok(!/onClick/.test(block), '状态条不可交互：一旦能点就会挡住宿主自己的按钮')
+})
+
+test('三个座位共用一口数据井，不各起一套定时器', () => {
+  const src = readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8')
+  assert.ok(src.includes('function createFeed()'), '必须有模块级共享数据源')
+  assert.ok(src.includes('function useFeed()'), '组件通过 useFeed 订阅')
+  // 三个座位组件里都应调用 useFeed，而不是各自 fetch
+  for (const name of ['StatusBar', 'SceneEntry', 'OverviewPage']) {
+    const i = src.indexOf(`function ${name}(`)
+    assert.ok(i > 0, `缺组件 ${name}`)
+    const body = src.slice(i, i + 1200)
+    assert.ok(body.includes('useFeed()'), `${name} 必须走共享数据源`)
+  }
+  const intervals = (src.match(/setInterval\(/g) || []).length
+  assert.equal(intervals, 3, `只该有 3 个 setInterval（state 30s / activity 5s / load 20s），实际 ${intervals}`)
+})
+
+// ── 三处座位的无头渲染：把「冷启动」与「有数据」两条路径都跑一遍 ──────────
+// 组件在 factory 闭包里拿不到，所以测试期把内部符号挂出来（只改测试里的源码字符串，
+// 生产文件不动）。feed 允许注入，才能喂真实形状的数据而不是只测空态。
+function renderSeats(snapshot) {
+  let src = readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8')
+  src = src.replace('const feed = createFeed()', 'const feed = (globalThis.__SB_FEED || createFeed())')
+  src = src.replace(
+    'return { apply, inject: [\'desktopWorkbenches\'] }',
+    'return { apply, inject: [\'desktopWorkbenches\'], __i: { StatusBar, SceneEntry, OverviewPage, ActivityCard, LoadCard, feed } }',
+  )
+  const ReactStub = {
+    // 忠实一点：React 会把位置参数塞进 props.children，Card 这类组件就靠它取子节点。
+    // 桩里不合并的话，`h(Card, {title}, body)` 会渲染出一张空卡片——那是桩的错，不是组件的错。
+    createElement: (type, props, ...kids) => {
+      const merged = { ...(props || {}), children: kids.length > 1 ? kids : kids[0] }
+      return typeof type === 'function' ? type(merged) : { type, props: merged, kids }
+    },
+    useState: (init) => [typeof init === 'function' ? init() : init, () => {}],
+    useEffect: () => {},
+    useCallback: (fn) => fn,
+    useRef: (v) => ({ current: v }),
+  }
+  let mod = null
+  const windowStub = { __ModuleLoader__: { load: (m) => { mod = m } } }
+  const documentStub = {
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: () => ({ dataset: {}, style: {}, textContent: '' }),
+    head: { appendChild: () => {} },
+  }
+  const requireStub = (name) => {
+    if (name === 'react') return ReactStub
+    throw new Error(`客户端意外依赖 ${name}`)
+  }
+  globalThis.__SB_FEED = {
+    get: () => snapshot,
+    subscribe: () => () => {},
+    start: () => {}, stop: () => {}, refresh: async () => {},
+  }
+  try {
+    new Function('window', 'document', 'require', src)(windowStub, documentStub, requireStub)
+    return mod.factory(requireStub).__i
+  } finally {
+    delete globalThis.__SB_FEED
+  }
+}
+
+/** 把元素树压成纯文本，用来断言"真的渲染出了这句人话"。 */
+function textOf(node) {
+  if (node == null || node === false) return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join(' ')
+  if (node.kids) return textOf(node.kids)
+  return ''
+}
+
+const FULL_SNAPSHOT = {
+  activity: { available: true, active: [{ scene: '知识消化', phaseLabel: '思考中', detail: '卡片 3/8', remainMs: 42000 }], total: 2, stale: 1 },
+  load: { ok: true, exitCode: 0, cpu: 9.5, ram: 62.5, minOk: 70, minWarn: 85, samples: [8, 10, 9.5], time: '23:40:12', cached: false, ramUsedMB: 20480, ramTotalMB: 32768 },
+  state: {
+    state: {
+      ok: true, root: 'E:/SYMBIO', checkedAt: '2026-11-06T15:40:00Z',
+      issues: [{ path: 'cards', reason: 'ENOENT' }],
+      config: { stage: 'A' },
+      queue: { tasks: [{ time: '1', task: 'x', status: '待' }], conflicts: [] },
+      handoff: { status: 's', next: 'n' },
+      cards: { available: true, total: 3, items: [] },
+      memory: { layers: [{ key: '00', label: '宪法', files: 2, bytes: 100 }], totalFiles: 2, totalBytes: 100 },
+      libraries: {
+        sharedSkills: { available: true, count: 1, installed: 1, items: [] },
+        parts: { available: true, count: 6, items: [], byKind: { 脚本: 6 } },
+        projects: { available: true, count: 1, items: [], byStatus: { 已交付: 1 } },
+      },
+      assets: { skills: ['a'], tools: ['b'] },
+      privacyDoc: { loaded: true, chars: 10 },
+      redLines: ['r1'],
+    },
+  },
+  health: { version: '0.5.0', bridge: { online: true }, dataSource: { root: 'E:/SYMBIO' } },
+  error: '', loading: false,
+}
+
+test('座位组件冷启动（全 null）不崩，且如实说"探测中/未采样"', () => {
+  const { StatusBar, SceneEntry, OverviewPage } = renderSeats({
+    health: null, state: null, activity: null, load: null, error: '', loading: true,
+  })
+  const bar = textOf(StatusBar())
+  assert.match(bar, /探测中/, '亮灯没数据时应说探测中')
+  assert.match(bar, /负载 —/, '负载没数据时应显示「负载 —」，不能编数字')
+  assert.equal(textOf(SceneEntry({ size: 20 })).trim(), '', '侧栏图标只有图形，不该有可见文案')
+  const page = textOf(OverviewPage())
+  assert.match(page, /协同总览/)
+  assert.match(page, /当前没有场景在干活|探测中/, '空态要说清没活干，而不是报错')
+})
+
+test('座位组件有数据时渲染出真实内容，且数字来自快照', () => {
+  const { StatusBar, OverviewPage } = renderSeats(FULL_SNAPSHOT)
+  const bar = textOf(StatusBar())
+  assert.match(bar, /知识消化/, '常驻条应显示当前场景')
+  assert.match(bar, /9\.5%/, '常驻条应显示真实 CPU 采样值')
+  assert.match(bar, /可派单/, '常驻条应显示 load-gate 的判定，而不是自己算')
+  assert.match(bar, /待办/, '常驻条应显示待闭环任务数')
+  const page = textOf(OverviewPage())
+  assert.match(page, /卡片 3\/8/, '总览页应显示活动明细')
+  assert.match(page, /ENOENT/, '数据源问题必须如实列出')
+  assert.match(page, /symbio-overview/, '页脚应标出自己占了哪个 key')
+})
+
+test('常驻状态条不使用任何可交互元素（overlay 不能挡住宿主）', () => {
+  const { StatusBar } = renderSeats(FULL_SNAPSHOT)
+  const walk = (n, hits = []) => {
+    if (n == null || typeof n !== 'object') return hits
+    if (Array.isArray(n)) { n.forEach((x) => walk(x, hits)); return hits }
+    if (n.type === 'button' || n.type === 'a' || n.type === 'input') hits.push(n.type)
+    if (n.props && (n.props.onClick || n.props.onMouseDown)) hits.push('handler')
+    if (n.kids) walk(n.kids, hits)
+    return hits
+  }
+  assert.deepEqual(walk(StatusBar()), [], '状态条里不许出现按钮/链接/点击回调')
+})
+
+
