@@ -13,3 +13,7 @@
 *.jpg binary
 *.ico binary
 *.woff2 binary
+
+# 批处理反过来要 CRLF：cmd.exe 对 LF 的 .cmd/.bat 处理不稳（跳转与标签解析出过错）
+*.cmd text eol=crlf
+*.bat text eol=crlf
