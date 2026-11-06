@@ -38,6 +38,26 @@ slots.inject('main', () => slots.register({ name: 'main', key: 'symbio-overview'
 
 拿不到 `slots` 时**只降级这三处附加座位，业务面板照旧挂载** —— 这条路径有测试锁（`test/contract.test.mjs`）。
 
+### 真机验收（2026-11-07，v0.5.0）
+
+宿主安装返回 `applied` 不等于已接管（这是本项目踩过两次的坑），所以验收分两段：先核磁盘，再重启看界面。
+
+**磁盘侧（重启前就能定论）**：`desired.json` = `symbio-workbench+0.5.0+…`；`web/node_modules` 软链指向该代际；代际内 `client.js` 的 md5 与构建源**逐字节一致**；`dsh.bundle.patch` / `dsh.client.inject` 形状正确；50 个 className 全部有对应 CSS 规则。
+
+**界面侧（五项全过）**：
+
+| # | 观察项 | 结果 |
+|---|---|---|
+| 1 | 业务面板顶栏徽标 | `v0.5.0` —— 该数字来自服务端 `/api/symbio/health`，说明**服务端模块也换了代际**，不只是前端 bundle 刷新 |
+| 2 | 右下角常驻胶囊 | 在，且可穿透（`pointer-events:none` 生效） |
+| 3 | 侧栏准星 | 在 |
+| 4 | 点准星 → 协同总览页 | 可切可回 |
+| 5 | **业务面板本体** | 与 0.4.0 完全一致，**零牵连** |
+
+**灯亮闭环**：心跳即数据源，不需要起 AI 桥。写入一条 `ttlMs=45000` 的心跳后，活动接口读到 `active=1 / phaseLabel「思考中」`，胶囊显示「1 处活动 · 联调 思考中」，圆点亮起、文字呼吸，TTL 到点自动回到「全场空闲」、绿点消失。这条已写成断言（含"灯不可读 ≠ 全场空闲"的区分），不靠肉眼看一次就算。
+
+> 回滚路径：`symbio-workbench-0.4.0.tgz`（从 0.4.0 代际原样重打，不含任何座位代码）。本次未使用。
+
 ---
 
 ## 这一版有什么
@@ -104,7 +124,7 @@ src/api.mjs           路由、桥探测、请求体兼容读取
 src/state.mjs         业务状态只读解析器（逐文件容错，issues 不编造；含三层库与活动心跳）
 src/tools.mjs         6 个白名单工具的受限运行器（/load 也复用它，不另开口子）
 lib/client.js         __ModuleLoader__.load + desktopWorkbenches.register，React 面板（含亮灯/负载胶囊/库区块）
-test/                 契约 / 解析 / 降级 / 转发 / 标识符遮蔽回归 / 无头渲染冒烟 / 亮灯 TTL / 负载失败态，共 39 项
+test/                 契约 / 解析 / 降级 / 转发 / 标识符遮蔽回归 / 无头渲染冒烟 / 亮灯 TTL / 负载失败态 / 亮灯文案与呼吸动画，共 40 项
 INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ```
 
@@ -121,7 +141,7 @@ INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ## 校验与打包
 
 ```sh
-npm run verify     # 5 文件语法检查 + 39 项自测（全绿才可发布）
+npm run verify     # 5 文件语法检查 + 40 项自测（全绿才可发布）
 pnpm pack          # → symbio-workbench-0.5.0.tgz
 ```
 

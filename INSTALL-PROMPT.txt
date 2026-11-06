@@ -4,7 +4,7 @@
 - 包路径：E:/SYMBIO/workbench/symbio-workbench-0.5.0.tgz（当前版本：v0.5.0）
 - 上一版是 v0.4.0（单业务面板）。本次是覆盖同名工作台，请用 **replace: true**
 - 宿主状态里应已有 local:symbio-workbench；若显示更早版本，以宿主实际状态为准，不要从文档推断
-- 已完成校验：`node --check`（服务端+客户端）全过；**契约 39/39 通过**（含三处座位的接入形状、
+- 已完成校验：`node --check`（服务端+客户端）全过；**契约 40/40 通过**（含三处座位的接入形状、
   slots 缺失时的降级、重复 apply 幂等、overlay 不拦鼠标、三座位共用一口数据井）
 - 包内没有凭证、没有用户数据、没有构建脚本，体积约 39 KB
 - **装完必须重启 Harness**：上一轮已实测，`application: applied` 只代表「写进代际清单 + pnpm 装好」，

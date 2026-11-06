@@ -702,6 +702,52 @@ test('座位组件有数据时渲染出真实内容，且数字来自快照', ()
   assert.match(page, /symbio-overview/, '页脚应标出自己占了哪个 key')
 })
 
+test('亮灯：有活动时胶囊逐字显示「N 处活动 · 场景 阶段」，圆点实心且呼吸；空闲时全灭', () => {
+  // 元素树里按条件收集节点 —— 用行为断言，不去硬编码颜色值
+  const collect = (node, pred, hits = []) => {
+    if (node == null || typeof node !== 'object') return hits
+    if (Array.isArray(node)) { node.forEach((x) => collect(x, pred, hits)); return hits }
+    if (pred(node)) hits.push(node)
+    if (node.kids) collect(node.kids, pred, hits)
+    return hits
+  }
+  const hasClass = (c) => (n) => (n.props?.className || '').split(' ').includes(c)
+
+  // ── 有活动（对应真机那条 ttlMs=45000 的「联调 / 思考中」）──
+  const busy = renderSeats({
+    ...FULL_SNAPSHOT,
+    activity: { available: true, active: [{ scene: '联调', phaseLabel: '思考中', detail: '座位联调中', remainMs: 41827 }], total: 1, stale: 0 },
+  })
+  const busyBar = busy.StatusBar()
+  const busyText = textOf(busyBar)
+  assert.match(busyText, /1 处活动 · 联调 思考中/, '有活动时必须逐字显示「N 处活动 · 场景 阶段」——这是真机要眼看的那一句')
+
+  const busyLive = collect(busyBar, hasClass('sb-live'))
+  assert.equal(busyLive.length, 1, '有活动时亮灯文字应带 sb-live（呼吸动画）')
+
+  const busyDot = collect(busyBar, hasClass('sb-dot'))[0]
+  assert.ok(busyDot?.props?.style?.background, '圆点必须有背景色（实心），不能只是个空 span')
+
+  // 侧栏准星右上角的绿点：靠「额外多一个绝对定位子元素」来标识
+  const busyAbs = collect(busy.SceneEntry({ size: 20 }), (n) => n.props?.style?.position === 'absolute')
+
+  // ── 空闲 ──
+  const idle = renderSeats({ ...FULL_SNAPSHOT, activity: { available: true, active: [], total: 0, stale: 0 } })
+  const idleBar = idle.StatusBar()
+  assert.match(textOf(idleBar), /全场空闲/, '没有活动时应说「全场空闲」')
+  assert.equal(collect(idleBar, hasClass('sb-live')).length, 0, '空闲时不许还带呼吸动画（灯必须真的会灭）')
+  const idleDot = collect(idleBar, hasClass('sb-dot'))[0]
+  assert.notEqual(busyDot.props.style.background, idleDot.props.style.background, '亮/灭两态的圆点颜色必须不同，否则等于灯没灭')
+
+  const idleEntryAbs = collect(idle.SceneEntry({ size: 20 }), (n) => n.props?.style?.position === 'absolute')
+  assert.equal(busyAbs.length, 1, '有活动时准星右上角必须多出那颗绿点')
+  assert.equal(idleEntryAbs.length, 0, '空闲时准星上不许留绿点')
+
+  // ── 灯不可读 ≠ 没活动（两种状态不许混为一谈）──
+  const broken = renderSeats({ ...FULL_SNAPSHOT, activity: { available: false, reason: 'EACCES', active: [], total: 0, stale: 0 } })
+  assert.match(textOf(broken.StatusBar()), /灯不可读/, '心跳读不到时必须明说，不能显示成「全场空闲」糊过去')
+})
+
 test('常驻状态条不使用任何可交互元素（overlay 不能挡住宿主）', () => {
   const { StatusBar } = renderSeats(FULL_SNAPSHOT)
   const walk = (n, hits = []) => {
