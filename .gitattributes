@@ -1,0 +1,15 @@
+# 行尾统一成 LF，任何平台检出都一样。
+#
+# 为什么需要它：Git for Windows 默认 core.autocrlf=true，在 Windows 上 clone
+# 出来的源码是 CRLF，再 pnpm pack 出来的包与仓库根那份（LF）字节不同——
+# 2026-11-07 实测：同一条 HEAD，clone 后重打包得到 40791 B / md5 86975e18，
+# 而仓库根那份是 40645 B / md5 f642784c。内容语义完全一样，但"字节可校验"这条
+# 证据链就断了：谁也没法证明市场/build 机上装到的东西和你验过的是同一个文件。
+* text=auto eol=lf
+
+# 二进制别碰
+*.tgz binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary

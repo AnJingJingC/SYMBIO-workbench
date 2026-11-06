@@ -43,6 +43,9 @@ const RULES = [
   ['.dsh/skills', '.dsh/skills'],
   ['shell', 'shell'],
   ['AGENTS.md', 'AGENTS.md'],
+  // 行尾策略也要跟着走：发布仓没有它，Windows 上 clone 出来就是 CRLF，
+  // 再打包得到的字节与仓库根那份不一致
+  ['.gitattributes', '.gitattributes'],
 ];
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.assembled', '心跳', 'temp', 'dist']);
