@@ -1,3 +1,7 @@
+# 发布仓根要放当前版本的安装包：别人可以直接下 .tgz 装，不必 clone 后自己 pack。
+# 例外只开给本产品包；旧版本必须删掉（0.3.4 教训：仓库里躺旧包，装的人不知道它比源码旧）。
+# 判断"哪个是当前版本"不靠人记 —— 用 node tools/sync-publish.mjs，它会报 staleTgz。
 *.tgz
+!/symbio-workbench-*.tgz
 memory/
 node_modules/

@@ -18,6 +18,8 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { root, has, flag, exists } from './lib/common.mjs';
 
 // [源（相对本仓）, 目标（相对发布仓）]；目标是 '' 表示铺到发布仓根
@@ -48,6 +50,67 @@ const SKIP_EXT = new Set(['.tgz', '.log']);
 // 只在本机有意义的开发期探针：读宿主 app.asar、默认路径绑死本机用户名，
 // 进公开库既没用又误导（别人 clone 下来跑不通）。留在私仓即可。
 const SKIP_REL_PREFIX = ['tools/dev/'];
+
+/**
+ * 从 .tgz 里读出 package/package.json（只解析 tar 头，不依赖 tar 命令）。
+ *
+ * 为什么要读包内版本而不是信文件名：文件名是手写的，包内 version 是打包时写死的。
+ * 2026-11-07 那次是人工从 GitHub 网页上传 0.5.0 的包——上传这条路能走通，但"传的是不是
+ * 那个版本"没有任何环节会替你确认。包名对、内容错，下载的人装完才发现。
+ */
+async function readTgzPackageJson(file) {
+  const buf = await fs.readFile(file);
+  const tar = zlib.gunzipSync(buf);
+  let off = 0;
+  while (off + 512 <= tar.length) {
+    const header = tar.subarray(off, off + 512);
+    if (header.every((b) => b === 0)) break; // 归档结束
+    const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/s, '');
+    const sizeStr = header.subarray(124, 136).toString('utf8').replace(/\0.*$/s, '').trim();
+    const size = parseInt(sizeStr, 8) || 0;
+    const body = tar.subarray(off + 512, off + 512 + size);
+    if (name === 'package/package.json') return JSON.parse(body.toString('utf8'));
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return null;
+}
+
+/**
+ * 发布仓根的安装包：源 = workbench/<name>-<version>.tgz。
+ *
+ * 为什么单独一条：RULES 是写死的路径，版本号会变；而且 *.tgz 在 SKIP_EXT 里被全局挡掉
+ * （主仓不该存构建产物）。发布仓不一样——它要有当前版本的包，否则别人只能 clone 后自己 pack。
+ */
+async function tgzEntry(srcRoot) {
+  const pkgFile = path.join(srcRoot, 'workbench', 'package.json');
+  let pkg;
+  try {
+    pkg = JSON.parse(await fs.readFile(pkgFile, 'utf8'));
+  } catch {
+    return { error: '读不到 workbench/package.json，无法确定当前版本' };
+  }
+  const file = `${pkg.name}-${pkg.version}.tgz`;
+  const src = path.join(srcRoot, 'workbench', file);
+  if (!(await exists(src))) {
+    return { error: `缺当前版本的安装包：workbench/${file}（先 pnpm pack 再同步）`, file };
+  }
+  const buf = await fs.readFile(src);
+  const md5 = crypto.createHash('md5').update(buf).digest('hex');
+  let inner = null;
+  try {
+    inner = await readTgzPackageJson(src);
+  } catch (e) {
+    return { error: `包解不开（${e.message}）：workbench/${file}`, file };
+  }
+  if (!inner) return { error: `包里没有 package/package.json：workbench/${file}`, file };
+  if (inner.name !== pkg.name || inner.version !== pkg.version) {
+    return {
+      error: `包内版本是 ${inner.name}@${inner.version}，源码是 ${pkg.name}@${pkg.version} —— 传错包了`,
+      file,
+    };
+  }
+  return { file, src, md5, size: buf.length, version: pkg.version };
+}
 
 function skipFile(rel) {
   const parts = rel.split('/');
@@ -99,10 +162,11 @@ async function expandRule(srcRoot, from, to) {
 
 async function sameFile(a, b) {
   try {
-    const [sa, sb] = await Promise.all([fs.stat(a), fs.stat(b)]);
-    if (sa.size !== sb.size) return false;
     const [ba, bb] = await Promise.all([fs.readFile(a), fs.readFile(b)]);
-    // 换行符不同不算内容变化（Windows 上 CRLF/LF 混用，逐字节比会天天报"有差异"）
+    if (ba.equals(bb)) return true;
+    // 尺寸不同不代表内容变了：发布仓在 Windows 上会被 git 转成 CRLF（主仓是 LF），
+    // 一份没改过的文件尺寸也必然不等。先归一化行尾再比，否则每次同步都报一堆假改动，
+    // 真改动就混在这些噪音里没人看。
     return ba.toString('utf8').replace(/\r\n/g, '\n') === bb.toString('utf8').replace(/\r\n/g, '\n');
   } catch {
     return false;
@@ -124,6 +188,11 @@ export async function syncPublish({ to = '', write = false, rootDir = null } = {
     if (r.missing) missing.push(r.missing);
     plan.push(...r.pairs);
   }
+
+  // 安装包单独处理：能取到才进计划；取不到只报告，不阻断其余同步
+  const tgz = await tgzEntry(srcRoot);
+  if (tgz.error) missing.push(tgz.error);
+  else plan.push([tgz.file, tgz.src]);
 
   const added = [];
   const changed = [];
@@ -172,6 +241,9 @@ export async function syncPublish({ to = '', write = false, rootDir = null } = {
     write,
     copied,
     counts: { planned: plan.length, added: added.length, changed: changed.length, same: same.length, extras: extras.length },
+    tgz: tgz.error ? { ok: false, message: tgz.error } : { ok: true, file: tgz.file, version: tgz.version, size: tgz.size, md5: tgz.md5 },
+    // 根上多出来的 .tgz = 上一个版本没删。它不会报错，只会被下载 —— 0.3.4 那次事故的成因
+    staleTgz: extras.filter((f) => f.toLowerCase().endsWith('.tgz')),
     missing,
     added,
     changed,
@@ -200,6 +272,15 @@ async function main() {
 
   console.log(`同步目标：${r.target}${write ? '（已写入）' : '（只看不写，加 --write 才动手）'}`);
   console.log(`计划 ${r.counts.planned} 个文件：新增 ${r.counts.added} / 改动 ${r.counts.changed} / 一致 ${r.counts.same} / 该删 ${r.counts.extras}\n`);
+
+  if (r.tgz?.ok) {
+    console.log(`安装包：${r.tgz.file}（${(r.tgz.size / 1024).toFixed(1)} KB，md5 ${r.tgz.md5}，包内版本已核 = ${r.tgz.version}）`);
+  } else if (r.tgz) {
+    console.log(`⚠ 安装包：${r.tgz.message}`);
+  }
+  if (r.staleTgz?.length) {
+    console.log(`⚠ 发布仓根上有 ${r.staleTgz.length} 个非当前版本的包，下载的人会拿到旧的：${r.staleTgz.join('、')}`);
+  }
 
   if (r.missing.length) console.log(`⚠ 本仓缺这些路径（规则写错或还没建）：${r.missing.join('、')}`);
   if (r.added.length) {
