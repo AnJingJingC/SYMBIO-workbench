@@ -1,17 +1,32 @@
-# SYMBIO 工作台 · DSH Desktop 业务面板（v0.5.0）
+# SYMBIO 工作台 · DSH Desktop 业务面板（v0.5.1）
 
 DSH Desktop 的一个工作台插件：**把「你在 DSH 里做的事」摆到四个能看见的地方**——业务面板、右下角常驻状态条、左侧栏入口、协同总览页。装一次，四处同时亮。
 
 在主面板里，长文进 → 六层记忆消化 → 出可检索的知识卡片；另一个场景「深度调研」走同一条链路，问题进 → 有证据的答案出，跨场景派单走文件总线 + 命令路由。
 
-能力来自工作台根目录（默认 `E:/SYMBIO`，可用环境变量 `SYMBIO_HOME` 改）：六层记忆、12 个技能、15 个本机工具（面板可点 6 个）、**三层库（共享技能 / 零件 / 项目台账）** 与免费 AI 桥。
+能力来自工作台根目录（按 `SYMBIO_HOME` → 插件配置 `dataRoot` → 包同位目录 → 历史默认 `E:/SYMBIO` 依次探测；四步都没命中时面板直说「未配置」，不拿一个猜出来的盘去凑数字）：六层记忆、12 个技能、15 个本机工具（面板可点 6 个）、**三层库（共享技能 / 零件 / 项目台账）** 与免费 AI 桥。
 
 - **业务面板**占左侧 60%，**右侧对话完全复用宿主原生 UI**；顶部状态栏吸顶常驻
 - **常驻状态条**（`shell.overlay`）：右下角一条胶囊，跨页可见，**不可点击、不挡任何宿主按钮**
 - **协同总览页**（`sidebar.panellist` + `main`）：侧栏一个准星入口，点开是全局视图——谁在干活、机器扛不扛得住、三层库长什么样
 - 安装：宿主 `install_local_workbench({ path: "<本包>.tgz", replace: true })`，返回 `applied` **并重启 Harness** 才真正接管（详见 `INSTALL-PROMPT.txt`）；包可直接下载，见下文「安装」
 - 身份：本地安装时由宿主派生为 `local:symbio-workbench`；`repository` 已指向本仓库，供市场索引溯源
-- **只读**：面板不写入、不迁移、不复制工作台根下的任何业务数据
+- **读写边界（别被"只读"两个字误导）**：读接口（health / state / activity / load / tools）**只读**业务根——不创建、不迁移、不复制目录树；**写只发生在你按下的两个动作上**：落一张卡（`/intake`）、跑一个工具（`/tools/run`，其中 `intake`、`index-build` 会写盘，白名单外一个都跑不了）。
+
+---
+
+## v0.5.1 修了什么（对外可用性）
+
+上一版能跑，但把包发给别人会踩四个坑。这一版全部堵上：
+
+| 问题 | 原来 | 现在 |
+|---|---|---|
+| 数据根写死 | `cordis.patch.yml` 里 `dataRoot: 'E:/SYMBIO'`，装到别人机器直接指向不存在的目录 | patch 不写盘符；`resolveDataRoot` 按 5 步探测，探不到就明说「未配置」并给填法 |
+| 不知道数字从哪来 | 页脚只显示路径 | 页脚同时显示**来源**（环境变量 / 插件配置 / 包同位 / 历史默认），并进 `/health` 的 `dataSource.source` |
+| 说「只读」但会写盘 | README 写「不写入任何业务数据」，可 `/intake` 落卡、`/tools/run` 跑 `index-build` 都在写 | 改成分层表述：读接口只读，写只发生在两个显式动作上 |
+| 包的身份没说清 | 文档没讲"包里只有插件、没有 tools/shell/memory" | 写进「诚实边界」首条，并说明装完没配根时长什么样 |
+
+配套：契约 40 → **42** 项（新增数据根探测链、未配置时的 503 与指引）。
 
 ---
 
@@ -122,7 +137,7 @@ slots.inject('main', () => slots.register({ name: 'main', key: 'symbio-overview'
 
 ```
 package.json          dsh.bundle.patch + dsh.client.{platform,inject} + exports
-cordis.patch.yml      插件条目；root 用 dshHomePath，dataRoot 指向 E:/SYMBIO
+cordis.patch.yml      插件条目；root 用 dshHomePath，**不写死 dataRoot**（包不带数据，写死盘符会把别人机器指到不存在的目录）
 dsh/index.mjs         服务端入口，Schemastery Config，注册 /api/symbio/*
 src/api.mjs           路由、桥探测、请求体兼容读取
 src/state.mjs         业务状态只读解析器（逐文件容错，issues 不编造；含三层库与活动心跳）
@@ -139,8 +154,18 @@ INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 
 ## 配置
 
-`dsh/index.mjs` 的数据根优先级：`process.env.SYMBIO_HOME` → `config.dataRoot` → `E:/SYMBIO`。
-换机器时设环境变量即可，不用改包。`bridgeUrl` 默认 `http://127.0.0.1:31239`。
+数据根**不在包里写死**，按这个顺序探测（`src/api.mjs` 的 `resolveDataRoot`）：
+
+| 顺序 | 来源 | 说明 |
+|---|---|---|
+| 1 | `process.env.SYMBIO_HOME` | 换机器只需设这个，不用改包 |
+| 2 | 插件配置 `dataRoot` | 宿主 patch 或用户在插件设置里填 |
+| 3 | 包同位目录 | 开发/自托管布局：`<repo>/workbench/dsh/index.mjs` 上跳两级，且 `<repo>` 下同时有 `memory/` 与 `tools/` |
+| 4 | 历史默认 `E:/SYMBIO` | **只在这台机器真实存在时采用** |
+| 5 | 未配置 | `/health` 回 `dataSource.source = "unset"`，面板顶栏显示「数据源 未配置」并给出填法，读接口回 503 |
+
+面板页脚会把最终根**和它的来源**一起显示（`环境变量 / 插件配置 / 包同位 / 历史默认`）——装完数字全是「—」时，先看这一行，
+不用去查文件权限。`bridgeUrl` 默认 `http://127.0.0.1:31239`。
 
 ## 校验与打包
 
@@ -166,11 +191,12 @@ https://github.com/AnJingJingC/SYMBIO-workbench/raw/main/symbio-workbench-0.5.0.
 伴生桥（可选，不启动面板也能用；路径换成你的工作台根）：
 
 ```sh
-cd "$SYMBIO_HOME/shell" && npm run bridge     # 默认 SYMBIO_HOME=E:/SYMBIO
+cd "$SYMBIO_HOME/shell" && npm run bridge     # 先 export SYMBIO_HOME=<你的工作台根>
 ```
 
 ## 还没做的 / 诚实边界
 
+- **这个包只带"看的"那半，不带"做的"那半**：`.tgz` 里只有插件本体（`dsh/`、`src/`、`lib/`），工作台根下的 `tools/`（15 个 Worker）、`shell/`（免费 AI 桥）、`memory/`、`config/` 都**不在包内**——它们是数据与伴生进程，按设计由用户自己那份工作台提供。所以装完包、没配好根，面板会亮但数字全是「—」并显示「数据源 未配置」；这不是装坏了，是缺根。完整的"从零到能用"要走 `INSTALL.md` 的初始化步骤。
 - **工具箱接入宿主 Agent**：dsh-desktop 工作台契约只给「面板 + `/api/symbio/*` 路由」，`DshClientManifest.inject` 明确「不是 Cordis 服务注入」，**没有**宿主 Agent 工具注册服务。但 12 个技能中已有 10 个通过 `node tools/*.mjs` 在对话间接触发这些工具，且本版把工具箱做成 `GET /api/symbio/tools` 机器可读清单 + `POST /api/symbio/tools/run` 可调用面（详见 `docs/工具箱-宿主Agent接入.md`）。要更严格的「Agent 原生工具」集成，需等 dsh-desktop 开放对应契约。
 - **多面板：从「未验证」到「已实测」（v0.5.0 更新）**：`sidebar.panellist`（list）+ `main`（keyed）确为官方多面板机制，已由座位探针 0.1.3 在真机逐条验证四行全 `ok:true`，本版据此接上常驻状态条与协同总览页。**但仍有一条限制**：`main` 是按 key **切换**中央面板，不是同屏并列——点开总览页时业务面板会被替换。真同屏并列在现有座位里没有空位：`dockkit` 是宿主内部 UI 包、既非座位也非服务，动态插件拿不到（已查实），而 `shell.bottom` 被 inspector 占用。三条路见 `docs/外壳路线评估.md`。证据见 `reports/座位探针-验收定稿.json` 与 `docs/外壳路线评估.md`。
 - **`rightbar` 不能用**：它已被宿主右栏占用（契约原文 "OCCUPIED by the right Sidebar"），注册会**替换**右栏而不是并排——而且不会报错。同理 `root` 明令禁止注册（会 shadow 整个 frame）。

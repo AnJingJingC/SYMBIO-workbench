@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import os from 'node:os'
 import path from 'node:path'
-import { createApiRoutes, EXPECTED_ASSETS, API_PREFIX, VERSION, readJsonBody } from '../src/api.mjs'
+import { createApiRoutes, EXPECTED_ASSETS, API_PREFIX, VERSION, readJsonBody, resolveDataRoot, DATA_ROOT_HINT } from '../src/api.mjs'
 import { readState } from '../src/state.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -35,11 +35,88 @@ test('打进 tgz 的文件都真实存在', () => {
   }
 })
 
-test('cordis.patch.yml 的 name 必须是 npm 包名，且声明真实业务根', () => {
+test('cordis.patch.yml 的 name 必须是 npm 包名，且不把本机盘符写死给外人', () => {
   assert.match(patch, /name:\s*symbio-workbench/)
   assert.match(patch, /id:\s*symbio-workbench/)
   assert.match(patch, /dshHomePath\('symbio-workbench'\)/)
-  assert.match(patch, /dataRoot:\s*'E:\/SYMBIO'/)
+  // 包不带数据：patch 里写死绝对路径，装到别人机器上就会把面板指到一个不存在的目录。
+  // 数据根交给 resolveDataRoot 探测，这里只守住"不许写死"。
+  assert.doesNotMatch(patch, /dataRoot:\s*['"]?[A-Za-z]:[\\/]/, 'patch 不得写死本机绝对路径')
+  assert.doesNotMatch(patch, /dataRoot:\s*['"]\//, 'patch 不得写死 POSIX 绝对路径')
+})
+
+test('数据根探测：env → config → 包同位 → 历史默认 → 未配置', async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), 'symbio-root-'))
+  try {
+    // 造一个"仓库布局"：<tmp>/repo/{memory,tools} + <tmp>/repo/workbench/dsh
+    const repo = path.join(tmp, 'repo')
+    await mkdir(path.join(repo, 'memory'), { recursive: true })
+    await mkdir(path.join(repo, 'tools'), { recursive: true })
+    await mkdir(path.join(repo, 'workbench', 'dsh'), { recursive: true })
+    const selfDir = path.join(repo, 'workbench', 'dsh')
+
+    const fromEnv = resolveDataRoot({ envRoot: tmp, configRoot: 'C:/wrong', selfDir })
+    assert.deepEqual(fromEnv, { root: path.resolve(tmp), source: 'env' }, '环境变量优先级最高')
+
+    const fromConfig = resolveDataRoot({ envRoot: '', configRoot: repo, selfDir })
+    assert.deepEqual(fromConfig, { root: path.resolve(repo), source: 'config' })
+
+    const fromSibling = resolveDataRoot({ selfDir })
+    assert.deepEqual(fromSibling, { root: repo, source: 'sibling' }, '包同位目录须同时有 memory/ 与 tools/')
+
+    // 只有一半标记的目录不算工作台根，不能被认成数据根
+    const half = path.join(tmp, 'half')
+    await mkdir(path.join(half, 'memory'), { recursive: true })
+    await mkdir(path.join(half, 'workbench', 'dsh'), { recursive: true })
+    const notRoot = resolveDataRoot({ selfDir: path.join(half, 'workbench', 'dsh') })
+    assert.notEqual(notRoot.root, half, '缺 tools/ 的目录不得被当作数据根')
+  } finally {
+    await rm(tmp, { recursive: true, force: true })
+  }
+})
+
+test('数据根未配置时如实报未配置，且不拿 null 去拼路径', async () => {
+  const nowhere = path.join(os.tmpdir(), `symbio-absent-${Date.now()}`)
+  assert.deepEqual(
+    resolveDataRoot({ selfDir: nowhere, legacyRoot: nowhere }),
+    { root: null, source: 'unset' },
+    '找不到根时必须返回 unset，不能猜一个',
+  )
+
+  // 本机若设了 SYMBIO_HOME，探测会先命中它，这条用例就测不到 unset 分支
+  const savedEnv = process.env.SYMBIO_HOME
+  delete process.env.SYMBIO_HOME
+  try {
+    const routes = createApiRoutes({ bridgeUrl: 'http://127.0.0.1:1', dataRoot: '', selfDir: nowhere, legacyRoot: nowhere })
+    const unset = routes.filter(r => r.path === `${API_PREFIX}/state` || r.path === `${API_PREFIX}/activity` || r.path === `${API_PREFIX}/load`)
+    assert.equal(unset.length, 3)
+    for (const route of unset) {
+      const res = await route.fetch(new Request('http://x'))
+      assert.equal(res.status, 503, `${route.path} 在根未配置时应回 503`)
+      const body = await res.json()
+      assert.equal(body.error, 'data-root-unset')
+      assert.equal(body.message, DATA_ROOT_HINT)
+      assert.equal(body.dataSource.root, null)
+      assert.equal(body.dataSource.source, 'unset')
+    }
+
+    // /health 不 503：它要能告诉前端"没配置"，否则面板连提示都拿不到
+    const health = routes.find(r => r.path === `${API_PREFIX}/health`)
+    const hres = await health.fetch()
+    assert.equal(hres.status, 200)
+    const hbody = await hres.json()
+    assert.equal(hbody.dataSource.source, 'unset')
+    assert.equal(hbody.dataSource.reachable, false)
+    assert.equal(hbody.dataSource.hint, DATA_ROOT_HINT)
+
+    // 落卡与跑工具都依赖根，也不能在没根时 500
+    const intake = routes.find(r => r.path === `${API_PREFIX}/intake`)
+    const ires = await intake.fetch(new Request('http://x', { method: 'POST', body: JSON.stringify({ body: '测试' }) }))
+    assert.equal(ires.status, 503)
+    assert.equal((await ires.json()).error, 'data-root-unset')
+  } finally {
+    if (savedEnv !== undefined) process.env.SYMBIO_HOME = savedEnv
+  }
 })
 
 test('设计清单与 SYMBIO 的十技能六工具五层一致', () => {

@@ -1,18 +1,33 @@
 请帮我把本机已打包的 SYMBIO 工作台**升级版**装进当前 DSH Desktop（同名升级，不是新装）。
 
 【已知事实，不要重新开发、不要改包内容】
-- 包路径：E:/SYMBIO/workbench/symbio-workbench-0.5.0.tgz（当前版本：v0.5.0）
+- 包路径：E:/SYMBIO/workbench/symbio-workbench-0.5.1.tgz（当前版本：v0.5.1）
   若本机没有这个文件（比如你是从仓库拿到的），先下载再装，然后把下面第 2 步的 path 换成实际路径：
-  https://github.com/AnJingJingC/SYMBIO-workbench/raw/main/symbio-workbench-0.5.0.tgz
-- 上一版是 v0.4.0（单业务面板）。本次是覆盖同名工作台，请用 **replace: true**
+  https://github.com/AnJingJingC/SYMBIO-workbench/raw/main/symbio-workbench-0.5.1.tgz
+- 上一版是 v0.5.0（四处座位已验收）。本次是覆盖同名工作台，请用 **replace: true**
 - 宿主状态里应已有 local:symbio-workbench；若显示更早版本，以宿主实际状态为准，不要从文档推断
-- 已完成校验：`node --check`（服务端+客户端）全过；**契约 40/40 通过**（含三处座位的接入形状、
-  slots 缺失时的降级、重复 apply 幂等、overlay 不拦鼠标、三座位共用一口数据井）
-- 包内没有凭证、没有用户数据、没有构建脚本，体积约 39 KB
+- 已完成校验：`node --check`（服务端+客户端）全过；**契约 42/42 通过**（含三处座位的接入形状、
+  slots 缺失时的降级、重复 apply 幂等、overlay 不拦鼠标、三座位共用一口数据井、数据根五步探测、
+  未配置时的 503 与指引）
+- 包内没有凭证、没有用户数据、没有构建脚本，体积约 43 KB
 - **装完必须重启 Harness**：上一轮已实测，`application: applied` 只代表「写进代际清单 + pnpm 装好」，
   运行中的进程仍加载旧代际。不重启你会看到旧面板，并误判新功能没生效。
 
-【v0.5.0 新增的东西 —— 从「一块面板」到「四处座位」】
+【v0.5.1 只修对外可用性，不动界面】
+上一版能跑，但把包发给别人会踩四个坑，这一版堵上：
+1. **不再写死数据根**：`cordis.patch.yml` 里原有的 `dataRoot: 'E:/SYMBIO'` 已删。装到别人机器上时，
+   那个路径根本不存在，面板会一片「—」而用户不知道该改哪。现在按
+   `SYMBIO_HOME` → 插件配置 `dataRoot` → 包同位目录 → 历史默认（真存在才用）→ 未配置，依次探测。
+2. **页脚显示数据从哪来**：除了路径，还显示来源（环境变量 / 插件配置 / 包同位 / 历史默认）。
+   探不到根时顶栏直接写「数据源 未配置」，并给出"填 dataRoot 或设 SYMBIO_HOME"的指引。
+3. **「只读」表述纠偏**：读接口确实只读；但 `/intake` 落卡、`/tools/run` 跑 `index-build` 会写盘，
+   文档改成按动作分层的说法，不再笼统写"不写入任何业务数据"。
+4. **包的身份写清楚**：`.tgz` 里只有插件本体，`tools/`、`shell/`、`memory/`、`config/` 都不在包内。
+   装完没配根 → 面板亮但数字全「—」并显示「数据源 未配置」，这不是装坏了。
+
+界面、四点座位、面板布局与 v0.5.0 **完全一致**，重启后看到的东西应当和上一版一模一样（除版本号）。
+
+【v0.5.0 已有：从「一块面板」到「四处座位」】
 前三个座位不是推测，是 `seat-probe/` 探针包在真机上逐条验过的（2026-11-05，四行全 ok:true）：
 
 | 座位 | 你会看到什么 |
@@ -30,7 +45,7 @@
 1. 先探测能力：记录当前 DSH Desktop 的版本、平台、架构，确认本会话能发现 install_local_workbench。
    以本会话实际能看到的工具为准，不要从文档日期推断。
 2. 调用：
-   install_local_workbench({ path: "E:/SYMBIO/workbench/symbio-workbench-0.5.0.tgz", replace: true })
+   install_local_workbench({ path: "E:/SYMBIO/workbench/symbio-workbench-0.5.1.tgz", replace: true })
    如弹出权限审批，告诉我需要批准，我来手动同意；不要绕过。
 3. 读取返回的 application 字段并**如实报告具体值**：applied / restart-required / failed / cancelled / overridden。
    只有 applied 才算已写入，其他值不要说成「装好了」。
@@ -39,11 +54,14 @@
 【约束】
 - 不要自行关闭或重启 DSH Desktop / Harness，不要用 ps / pgrep 探测进程。
 - 不要用 CLI 或直接改 profile 文件绕过 Plugin Manager；审批被拒就如实停下。
-- 不要修改 E:/SYMBIO 下的任何业务文件（memory/、parts/、projects/、cards/ 只读）。
+- 安装过程不得改动 E:/SYMBIO 下的任何业务文件（`memory/`、`parts/`、`projects/` 一律不动）。
+  注意：装完之后面板本身的 `/intake`（落卡）与 `/tools/run`（跑工具）**会**写这些目录——
+  那是用户主动点的动作，不是安装行为，别混为一谈。
 
 【重启后请告诉我五件事（只念事实，不推断）】
 1. 业务面板是否还是原来那块（左侧栏「工作台」切换区选「SYMBIO 工作台」）；
-   顶部应有：数据源灯 / 桥灯 / 亮灯胶囊 / 负载胶囊 / 版本 v0.5.0 / 刷新。
+   顶部应有：数据源灯 / 桥灯 / 亮灯胶囊 / 负载胶囊 / 版本 v0.5.1 / 刷新。
+   页脚「数据源」那一行，除路径外还应看到来源标注（本机应显示「历史默认路径」）。
 2. **右下角有没有出现一条常驻胶囊**？内容大致是「N 处活动 · <场景> <阶段> | CPU xx% 内存 xx% 可派单 | 待办 N」。
    没有的话，请说「没看到」，不要自己找原因。
 3. **左侧栏有没有多一个准星图标**？

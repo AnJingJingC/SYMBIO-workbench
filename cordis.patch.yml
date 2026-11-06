@@ -3,5 +3,7 @@
       name: symbio-workbench
       config:
         root: !!js dshHomePath('symbio-workbench')
-        dataRoot: 'E:/SYMBIO'
+        # 故意不写死 dataRoot：包本身不带数据，写死盘符会把别人机器上的面板
+        # 指到一个不存在的目录。探测顺序见 dsh/index.mjs：
+        # SYMBIO_HOME → 此项 → 包同位目录 → 历史默认（真存在才用）→ 未配置（面板给配置指引）。
         bridgeUrl: 'http://127.0.0.1:31239'

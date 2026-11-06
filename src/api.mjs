@@ -5,6 +5,7 @@
 // 读不到 → null + issues，接口如实报，不填兜底假值。
 
 import { access } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readState, readHeartbeats } from './state.mjs';
@@ -12,7 +13,49 @@ import { listTools, runTool } from './tools.mjs';
 
 export const API_PREFIX = '/api/symbio';
 export const DEFAULT_DATA_ROOT = 'E:/SYMBIO';
-export const VERSION = '0.5.0';
+export const VERSION = '0.5.1';
+
+// 判定"这里是不是一个工作台根"：光有目录不算，得同时有记忆层与工具层。
+// 两个都没有的目录（比如 C:/Windows）绝不会被误认成数据根。
+const ROOT_MARKERS = ['memory', 'tools'];
+
+function looksLikeWorkbenchRoot(dir) {
+  if (!dir) return false;
+  try {
+    return ROOT_MARKERS.every((marker) => statSync(path.join(dir, marker)).isDirectory());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 解析业务数据根。包本身不带数据，所以**不能**替用户决定盘符。
+ * 顺序：环境变量 → 宿主配置 → 包同位目录（仓库布局）→ 历史默认（存在才用）→ 未配置。
+ * 返回 source 供面板显示"这些数字是从哪读的"，未配置时面板给的是修复指引而不是一片空表。
+ */
+export function resolveDataRoot({ envRoot, configRoot, selfDir, legacyRoot = DEFAULT_DATA_ROOT } = {}) {
+  const env = typeof envRoot === 'string' ? envRoot.trim() : '';
+  if (env) return { root: path.resolve(env), source: 'env' };
+
+  const cfg = typeof configRoot === 'string' ? configRoot.trim() : '';
+  if (cfg) return { root: path.resolve(cfg), source: 'config' };
+
+  // 开发/自托管布局：<repo>/workbench/dsh/index.mjs → selfDir 上跳两级即仓库根
+  if (selfDir) {
+    const guess = path.resolve(selfDir, '..', '..');
+    if (looksLikeWorkbenchRoot(guess)) return { root: guess, source: 'sibling' };
+  }
+
+  // 历史默认：只在这台机器真的存在时采用，不联网、不猜
+  if (looksLikeWorkbenchRoot(legacyRoot)) return { root: legacyRoot, source: 'legacy' };
+
+  return { root: null, source: 'unset' };
+}
+
+/** 未配置数据根时给前端的可执行指引（不含任何本机绝对路径猜测）。 */
+export const DATA_ROOT_HINT =
+  '未找到工作台根目录。请在插件配置里填 dataRoot，或设环境变量 SYMBIO_HOME 指向你的工作台根' +
+  '（该目录下应同时有 memory/ 与 tools/）。';
 
 // 「设计清单」：只用来核对资产是否齐全，不代表当前读到的实时状态。
 // 面板上的实时数量一律取 /state 的 assets；数据源不可读时显示「—」并说明原因。
@@ -52,6 +95,7 @@ export async function probeBridge(bridgeUrl) {
 }
 
 async function probeRoot(root) {
+  if (!root) return { root: null, reachable: false, reason: 'unset', hint: DATA_ROOT_HINT };
   try {
     await access(root);
     return { root, reachable: true, reason: null };
@@ -94,9 +138,24 @@ export async function readJsonBody(request, maximum = 16 * 1024) {
   }
 }
 
-export function createApiRoutes({ bridgeUrl, dataRoot } = {}) {
+export function createApiRoutes({ bridgeUrl, dataRoot, dataRootSource, selfDir, legacyRoot } = {}) {
   const base = String(bridgeUrl || 'http://127.0.0.1:31239').replace(/\/+$/, '');
-  const root = String(dataRoot || DEFAULT_DATA_ROOT);
+  // 显式传了根就照用（测试、多实例都靠这条）；没传才探测，绝不默认指向某个盘。
+  const resolved = dataRoot
+    ? { root: path.resolve(String(dataRoot)), source: dataRootSource || 'config' }
+    : resolveDataRoot({ envRoot: process.env.SYMBIO_HOME, configRoot: dataRoot, selfDir, legacyRoot });
+  const root = resolved.root;
+  const rootSource = resolved.source;
+
+  // 没有根时，所有读接口都不许拿 null 去拼路径（path.join(null) 会直接抛）。
+  const missingRoot = () => json({
+    ok: false,
+    error: 'data-root-unset',
+    message: DATA_ROOT_HINT,
+    hint: DATA_ROOT_HINT,
+    dataSource: { root: null, reachable: false, reason: 'unset', source: 'unset', hint: DATA_ROOT_HINT },
+    checkedAt: new Date().toISOString(),
+  }, 503);
 
   // 负载胶囊缓存：load-gate 采样 3 次 × 1.5s ≈ 4.5s，不能让面板每次轮询都跑一遍。
   // 15s 足够"接近实时"，又不会把宿主进程卡住。
@@ -118,7 +177,7 @@ export function createApiRoutes({ bridgeUrl, dataRoot } = {}) {
           identity: 'local:symbio-workbench',
           expectedAssets: EXPECTED_ASSETS,
           redLines: RED_LINES,
-          dataSource: source,
+          dataSource: { ...source, source: rootSource },
           bridge,
           checkedAt: new Date().toISOString(),
         });
@@ -129,6 +188,7 @@ export function createApiRoutes({ bridgeUrl, dataRoot } = {}) {
       methods: ['GET'],
       requestBody: 'buffered',
       async fetch() {
+        if (!root) return missingRoot();
         const state = await readState(root);
         return json({
           ok: true,
@@ -145,6 +205,7 @@ export function createApiRoutes({ bridgeUrl, dataRoot } = {}) {
       methods: ['GET'],
       requestBody: 'buffered',
       async fetch() {
+        if (!root) return missingRoot();
         const activity = await readHeartbeats(root);
         return json({
           ok: true,
@@ -165,6 +226,7 @@ export function createApiRoutes({ bridgeUrl, dataRoot } = {}) {
       methods: ['GET'],
       requestBody: 'buffered',
       async fetch() {
+        if (!root) return missingRoot();
         const now = Date.now();
         if (loadCache.value && now - loadCache.at < LOAD_TTL_MS) {
           return json({ ...loadCache.value, cached: true, ageMs: now - loadCache.at });
@@ -284,6 +346,7 @@ export function createApiRoutes({ bridgeUrl, dataRoot } = {}) {
           return json({ ok: false, errorType: 'bad-request', message: error?.message ?? '请求体无效' }, 400);
         }
         const name = typeof payload.name === 'string' ? payload.name : '';
+        if (!root) return missingRoot();
         const result = await runTool(name, root, {
           input: payload.input,
           scene: payload.scene,
@@ -352,6 +415,7 @@ export function createApiRoutes({ bridgeUrl, dataRoot } = {}) {
           return json({ ok: false, errorType: 'bad-request', message: error?.message ?? '请求体无效' }, 400);
         }
         const title = typeof payload.title === 'string' ? payload.title.trim() : '';
+        if (!root) return missingRoot();
         const source = typeof payload.source === 'string' ? payload.source.trim() : '';
         const body = typeof payload.body === 'string' ? payload.body : '';
         if (!body.trim()) {
