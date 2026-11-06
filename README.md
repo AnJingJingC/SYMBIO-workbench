@@ -26,7 +26,7 @@ DSH Desktop 的一个工作台插件：**把「你在 DSH 里做的事」摆到�
 | 说「只读」但会写盘 | README 写「不写入任何业务数据」，可 `/intake` 落卡、`/tools/run` 跑 `index-build` 都在写 | 改成分层表述：读接口只读，写只发生在两个显式动作上 |
 | 包的身份没说清 | 文档没讲"包里只有插件、没有 tools/shell/memory" | 写进「诚实边界」首条，并说明装完没配根时长什么样 |
 
-配套：契约 40 → **42** 项（新增数据根探测链、未配置时的 503 与指引）。
+配套：契约 40 → **43** 项（新增数据根探测链、未配置时的 503 与指引）。
 
 ---
 
@@ -143,7 +143,7 @@ src/api.mjs           路由、桥探测、请求体兼容读取
 src/state.mjs         业务状态只读解析器（逐文件容错，issues 不编造；含三层库与活动心跳）
 src/tools.mjs         6 个白名单工具的受限运行器（/load 也复用它，不另开口子）
 lib/client.js         __ModuleLoader__.load + desktopWorkbenches.register，React 面板（含亮灯/负载胶囊/库区块）
-test/                 契约 / 解析 / 降级 / 转发 / 标识符遮蔽回归 / 无头渲染冒烟 / 亮灯 TTL / 负载失败态 / 亮灯文案与呼吸动画，共 40 项
+test/                 契约 / 解析 / 降级 / 转发 / 标识符遮蔽回归 / 无头渲染冒烟 / 亮灯 TTL / 负载失败态 / 亮灯文案与呼吸动画，共 43 项
 INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ```
 
@@ -170,7 +170,7 @@ INSTALL-PROMPT.txt    可直接粘进 DSH Desktop 的升级安装提示词
 ## 校验与打包
 
 ```sh
-npm run verify     # 5 文件语法检查 + 40 项自测（全绿才可发布）
+npm run verify     # 5 文件语法检查 + 43 项自测（全绿才可发布）
 pnpm pack          # → symbio-workbench-0.5.0.tgz
 ```
 

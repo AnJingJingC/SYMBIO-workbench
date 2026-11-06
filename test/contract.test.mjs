@@ -839,3 +839,13 @@ test('常驻状态条不使用任何可交互元素（overlay 不能挡住宿主
 })
 
 
+test('数据根未配置时，面板不得把 /state 的 503 判成读取失败', () => {
+  // 这条锁的是一个真实踩过的坑：/state 在根未配置时回 503（带 hint），
+  // 如果前端写 `if (!a.ok || !b.ok) throw`，面板只会显示 "HTTP 200/503"，
+  // 我们准备好的配置指引就永远看不到——症状看着像"面板坏了"，其实是缺根。
+  const src = readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8')
+  assert.doesNotMatch(src, /!a\.ok\s*\|\|\s*!b\.ok/, 'health 与 state 不得一起判成功；state 的 503 是「未配置」不是故障')
+  assert.match(src, /data-root-unset/, '必须显式识别 data-root-unset')
+  assert.match(src, /数据源 未配置/, '顶栏要有「数据源 未配置」字样')
+  assert.match(src, /ROOT_SOURCE_LABEL/, '页脚要能说清数据根来源')
+})

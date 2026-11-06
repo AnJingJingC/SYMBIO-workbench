@@ -6,12 +6,12 @@
   https://github.com/AnJingJingC/SYMBIO-workbench/raw/main/symbio-workbench-0.5.1.tgz
 - 上一版是 v0.5.0（四处座位已验收）。本次是覆盖同名工作台，请用 **replace: true**
 - 宿主状态里应已有 local:symbio-workbench；若显示更早版本，以宿主实际状态为准，不要从文档推断
-- 已完成校验：`node --check`（服务端+客户端）全过；**契约 42/42 通过**（含三处座位的接入形状、
+- 已完成校验：`node --check`（服务端+客户端）全过；**契约 43/43 通过**（含三处座位的接入形状、
   slots 缺失时的降级、重复 apply 幂等、overlay 不拦鼠标、三座位共用一口数据井、数据根五步探测、
   未配置时的 503 与指引）
 - **本次没有做宿主安装验收**：改动集中在数据根解析与文档表述，界面零改动。离线已验证——
-  契约 42/42、三处打包 md5 一致（主仓 pack / 干净 clone 后 pack / 发布仓根份，
-  `4aab4e39377bc68d2e8874ca0676de2a`）、真机复跑探测读到 `E:/SYMBIO`（`source: legacy`，`issues: 0`）。
+  契约 43/43、三处打包 md5 一致（主仓 pack / 干净 clone 后 pack / 发布仓根份，
+  `9c51144d3d5cc8e9e1f1f37eefe00375`）、真机复跑探测读到 `E:/SYMBIO`（`source: legacy`，`issues: 0`）。
   所以这次重启后的验收，重点是"有没有变坏"，不是"新功能有没有出来"。
 - 包内没有凭证、没有用户数据、没有构建脚本，体积约 43 KB
 - **装完必须重启 Harness**：上一轮已实测，`application: applied` 只代表「写进代际清单 + pnpm 装好」，
