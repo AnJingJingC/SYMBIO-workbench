@@ -24,7 +24,7 @@
 
 **两条形态限制，别误解：**
 
-1. **`main` 是切换，不是同屏。** 点侧栏入口会把中央区换成总览页，业务面板不在了（真机实测 `panelProbe` 同时转 `false`）。真同屏要另找 dockkit 浮动面板。
+1. **`main` 是切换，不是同屏。** 点侧栏入口会把中央区换成总览页，业务面板不在了（真机实测 `panelProbe` 同时转 `false`）。真同屏在现有座位里没有空位（2026-11-07 解析宿主 SlotMap 共 100 条座位后确认）：并列只能靠接管 `shell.bottom`（会 shadow inspector）或改 patch.yml；不接管的话，能做的是在 `shell.overlay` 里放可开合浮动面板。`node tools/dev/slots-map.mjs` 可自查全表。
 2. **常驻状态条不可交互。** overlay 是全帧表面，`pointer-events` 恒为 `none` —— 一条状态条绝不该让宿主自己的按钮点不动。所以它只放三件「一眼读完」的事，不放按钮。
 
 接入形状（`ctx.slots` 直接读会抛 `cannot get property "slots" without inject`，必须走门面）：
@@ -159,7 +159,7 @@ cd E:/SYMBIO/shell && npm run bridge
 ## 还没做的 / 诚实边界
 
 - **工具箱接入宿主 Agent**：dsh-desktop 工作台契约只给「面板 + `/api/symbio/*` 路由」，`DshClientManifest.inject` 明确「不是 Cordis 服务注入」，**没有**宿主 Agent 工具注册服务。但 12 个技能中已有 10 个通过 `node tools/*.mjs` 在对话间接触发这些工具，且本版把工具箱做成 `GET /api/symbio/tools` 机器可读清单 + `POST /api/symbio/tools/run` 可调用面（详见 `docs/工具箱-宿主Agent接入.md`）。要更严格的「Agent 原生工具」集成，需等 dsh-desktop 开放对应契约。
-- **多面板：从「未验证」到「已实测」（v0.5.0 更新）**：`sidebar.panellist`（list）+ `main`（keyed）确为官方多面板机制，已由座位探针 0.1.3 在真机逐条验证四行全 `ok:true`，本版据此接上常驻状态条与协同总览页。**但仍有一条限制**：`main` 是按 key **切换**中央面板，不是同屏并列——点开总览页时业务面板会被替换。真同屏要另找 `dockkit` 浮动面板（其 `.d.ts` 不在开源 npm 包内，仍需真机试）。证据见 `reports/座位探针-验收定稿.json` 与 `docs/外壳路线评估.md`。
+- **多面板：从「未验证」到「已实测」（v0.5.0 更新）**：`sidebar.panellist`（list）+ `main`（keyed）确为官方多面板机制，已由座位探针 0.1.3 在真机逐条验证四行全 `ok:true`，本版据此接上常驻状态条与协同总览页。**但仍有一条限制**：`main` 是按 key **切换**中央面板，不是同屏并列——点开总览页时业务面板会被替换。真同屏并列在现有座位里没有空位：`dockkit` 是宿主内部 UI 包、既非座位也非服务，动态插件拿不到（已查实），而 `shell.bottom` 被 inspector 占用。三条路见 `docs/外壳路线评估.md`。证据见 `reports/座位探针-验收定稿.json` 与 `docs/外壳路线评估.md`。
 - **`rightbar` 不能用**：它已被宿主右栏占用（契约原文 "OCCUPIED by the right Sidebar"），注册会**替换**右栏而不是并排——而且不会报错。同理 `root` 明令禁止注册（会 shadow 整个 frame）。
 - 桥的登录态长期稳定性未验收（需手动登录一次后复验；cookie 存在站点分区里，重启桥不丢）
 - 四个站点（豆包 / DeepSeek / 通义千问 / 智谱）**已全部真机校准** `verified: true`。注意网页 AI 随时改版，选择器失效时用 `node probe-site.mjs <site> --input/--answer <候选>` 现场重试，不要靠改代码猜。

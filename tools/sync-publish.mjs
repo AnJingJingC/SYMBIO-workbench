@@ -45,10 +45,14 @@ const RULES = [
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.assembled', '心跳', 'temp', 'dist']);
 const SKIP_EXT = new Set(['.tgz', '.log']);
+// 只在本机有意义的开发期探针：读宿主 app.asar、默认路径绑死本机用户名，
+// 进公开库既没用又误导（别人 clone 下来跑不通）。留在私仓即可。
+const SKIP_REL_PREFIX = ['tools/dev/'];
 
 function skipFile(rel) {
   const parts = rel.split('/');
   if (parts.some((p) => SKIP_DIRS.has(p))) return true;
+  if (SKIP_REL_PREFIX.some((p) => rel.startsWith(p))) return true;
   return SKIP_EXT.has(path.extname(rel).toLowerCase());
 }
 
@@ -85,7 +89,11 @@ async function expandRule(srcRoot, from, to) {
   const files = await walkFiles(src);
   return {
     missing: null,
-    pairs: files.filter((f) => !skipFile(f)).map((f) => [`${to}/${f}`.replace(/^\/+/, ''), path.join(src, f.replace(/\//g, path.sep))]),
+    // 注意用「发布仓目标路径」做排除判断：walkFiles 给的 rel 是相对本条规则根的
+    // （例如 tools/ 下得到 dev/x.mjs），拿它比 tools/dev/ 前缀永远不匹配。
+    pairs: files
+      .filter((f) => !skipFile(`${to}/${f}`))
+      .map((f) => [`${to}/${f}`.replace(/^\/+/, ''), path.join(src, f.replace(/\//g, path.sep))]),
   };
 }
 
