@@ -126,14 +126,19 @@ async function cmdDispatch() {
   if (text === null) return { ok: false, errorType: 'board-missing', message: '任务看板不存在：memory/10-shared/任务看板.md' };
   let { lines, tail } = splitBoard(text);
   lines = lines.filter((l) => !l.includes('当前无未闭环任务')); // 来了真任务，占位行让位
-  // 找任务表格的最后一行，插在其后；找不到就追加到段尾
+  // 插在「表格最后一行」之后。空表时 rows 为空，此时不能再 push 到段尾——
+  // splitBoard 给出的 lines 末尾还跟着表头后的空行，插在那儿会让数据行掉出表格
+  // （2026-11-07 实测：插完后表头与数据行之间多了一个空行，表格当场断成两段）。
   const rows = taskRowLines(lines);
-  if (rows.length) {
-    const lastIdx = lines.lastIndexOf(rows[rows.length - 1]);
-    lines.splice(lastIdx + 1, 0, row);
-  } else {
-    lines.push(row);
+  let anchor = rows.length ? lines.lastIndexOf(rows[rows.length - 1]) : -1;
+  if (anchor < 0) {
+    // 空表：锚定最后一个以 | 开头的行（表头或分隔行），没有就追加
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (lines[i].trim().startsWith('|')) { anchor = i; break; }
+    }
   }
+  if (anchor >= 0) lines.splice(anchor + 1, 0, row);
+  else lines.push(row);
   await fs.writeFile(p, lines.join('\n') + (tail ? '\n' + tail : ''), 'utf8');
   // 派单亮灯：灯挂在**出手的一方**（from），因为"谁在派活"才是活动信号
   await beat({ scene: from, phase: 'dispatch', detail: `派单 #${h} → ${to}`, ttlMs: 60_000, rootDir: root() });

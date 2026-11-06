@@ -79,6 +79,9 @@ symbio/
 
 1. **体量红线**：场景私有记忆 ≤ 25KB；当前交接 ≤ 4KB（见 `config/symbio.config.json`）。超了搬进 `90-archive/`。开场只读开头几段。
 2. **改前备份，改后体检**：任何结构性改动前先复制到 `memory/90-archive/pre-change-<日期>/`；改完必须跑 `node tools/memory-lint.mjs`，FAIL 不为 0 就回滚。
+   **动了 `tools/` 里的写文件逻辑，还要跑 `node tools/selftest.mjs`**：它守的是"写进去的东西结构还对不对"——
+   已经踩过两次同类坑（`project.mjs deliver` 与 `bus.mjs dispatch` 各把 markdown 表格插断一次），
+   两次都是命令返回 ok、文件也写了，只是渲染出来表是断的。体检看不出来，只有断言能抓。
 3. **模型无关 SOP**：所有技能写成与模型无关的步骤；换模型不许跑崩，拿不到工具就降级成人工步骤。
 4. **免费优先、付费兜底**：默认免费档；付费只有在免费全挂、且 spend-guard 放行时，由宿主点名才用。
 
