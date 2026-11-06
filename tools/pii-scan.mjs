@@ -204,14 +204,24 @@ function main() {
     hits.push(...scanLevel(text, lv));
   }
 
-  const hasL1 = hits.some((h) => h.level === (rules.levels?.L1?.label || 'L1'));
+  const L1LABEL = rules.levels?.L1?.label || 'L1';
   const hasL2 = hits.some((h) => h.level === (rules.levels?.L2?.label || 'L2'));
   const hasL3 = hits.some((h) => h.level === (rules.levels?.L3?.label || 'L3'));
 
-  const verdict = hasL1 ? 'BLOCK' : hasL2 ? 'REDACT' : 'PASS';
+  // 2026-11-07：L1 关键词「裸词命中」不再判 BLOCK，降为 L2 提示。
+  // 真机实测 6 篇真实技术文档：5 篇被 token/验证码/密码/密钥 裸词误杀，0 篇含真实敏感值
+  // （cn-id-card / bank-card / passport / api-key-literal / private-key-block 全未命中）。
+  // 裸词只说明「在讨论这个概念」，不等于「泄露了这个值」。
+  // 真正的凭据仍由三条正则硬拦：api-key-literal / private-key-block / secret-assignment。
+  const l1Hits = hits.filter((h) => h.level === L1LABEL);
+  const l1Real = l1Hits.filter((h) => h.kind !== 'keyword');
+  const l1Words = l1Hits.filter((h) => h.kind === 'keyword');
+  const hasL1 = l1Real.length > 0;
+
+  const verdict = hasL1 ? 'BLOCK' : hasL2 || l1Words.length ? 'REDACT' : 'PASS';
   const result = {
     verdict,
-    level: hasL1 ? 'L1' : hasL2 ? 'L2' : hasL3 ? 'L3' : 'none',
+    level: hasL1 ? 'L1' : hasL2 || l1Words.length ? 'L2' : hasL3 ? 'L3' : 'none',
     action:
       verdict === 'BLOCK'
         ? '立即终止：内容命中硬红线，未做任何处理、未发送任何内容。'
@@ -222,6 +232,14 @@ function main() {
     scannedChars: text.length,
     hint: '本工具全程本地运行，不联网、不写日志。',
   };
+  if (l1Words.length && !hasL1) {
+    for (const h of l1Words) {
+      h.downgraded = true;
+      h.note = '硬红线关键词裸词命中 —— 已降为 L2 提示（没命中任何真实凭据格式，不拦截）';
+    }
+    result.keywordOnly = true;
+    result.note = `提到 ${l1Words[0].count} 个硬红线关键词，但没有任何真实凭据格式 → 按 L2 处理（脱敏后可出网）。`;
+  }
   if (ruleErrors.length) {
     result.ruleErrors = ruleErrors;
     result.hint = `⚠ 有 ${ruleErrors.length} 条规则编译失败，未参与匹配（见 ruleErrors）。此时 PASS 不代表安全。`;

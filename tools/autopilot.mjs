@@ -15,8 +15,9 @@
 // 诚实边界（先读再跑）：
 //   1. 依赖伴生桥在线且目标站点已登录（额度耗尽 = 桥报 not-logged-in，本工具不代登录，
 //      按"失败"计数，3 次进 _failed/）。启动桥：cd shell && npm run bridge
-//   2. 桥 question 上限 4000 字 → 原文 >2800 字不做桥内分块（多问合并极易烧额度且不可靠），
-//      直接进 _too-long/ 交宿主决定怎么切。
+//   2. 桥 question 上限 4000 字 → 单段消化按 BODY_CAP=2800 字留余量；超过就按段落
+//      切块（每块 ≤2800），逐块提要点后**再问一次**合并成一张卡。段数上限 MAX_CHUNKS=6，
+//      再多（>16800 字）进 _too-long/ 交宿主决定怎么切。代价是多段材料要多花 1+N 次额度。
 //   3. 消化质量 = 桥的输出质量。落卡前只做格式与字数闸，不做事实核查。
 //   4. 本工具只动 memory/50-inbox/ 与 knowledge-digest/cards/，不碰其他记忆层。
 
@@ -47,6 +48,7 @@ const BLOCKED = path.join(INBOX, '_blocked');
 const FAILED = path.join(INBOX, '_failed');
 const TOOLONG = path.join(INBOX, '_too-long');
 const BODY_CAP = 2800;          // 桥 4000 字上限 − 指令余量
+const MAX_CHUNKS = 6;           // 分段上限：再多就不值得（额度与合并质量都撑不住）
 const MAX_FAILS = 3;
 
 const log = (...m) => console.log(`[autopilot ${new Date().toISOString()}]`, ...m);
@@ -124,29 +126,124 @@ async function bridgeAsk(question) {
 }
 
 const DIGEST_PROMPT = (title) =>
-  `请把下面的材料消化成一张知识卡片，严格满足：① 总字数 ≤1200 字；② 第一行是「# <卡片标题>」；` +
+  `请把下面的材料消化成一张知识卡片，严格满足：① 总字数 ≤1200 字；② 第一行是「# <卡片标题>」，` +
+  `标题要一句话说清这是什么（别照抄文件名）；` +
   `③ 依次有小节：一句话结论 / 要点（≤5条）/ 值得记的原文片段 / 标签（#开头，2-4个）。` +
   `不要输出卡片以外的任何话。材料标题：「${title}」。\n\n材料正文：\n`;
+
+// 入料文件名 → 卡片标题。
+// 踩过：用户随手丢 2026-11-07-xxx.md，标题原样传给 intake，intake 再补一次日期，
+// 结果文件名变成 2026-11-07-2026-11-07-xxx.md。日期由 intake 统一加，入料这边先剥掉。
+const cardTitle = (name) =>
+  name.replace(/\.md$/i, '').replace(/^\d{4}-\d{2}-\d{2}[-_\s]*/, '').trim() || '未命名';
+
+// 桥不知道「来源 / 摄入时间 / 密级」，让它编就是造假。这三行由代码补真实值，
+// 桥只管正文。技能规范与 index-build 的 META_PREFIX 都按这四行对齐。
+function withMeta(markdown, { source, at, level, fallbackTitle }) {
+  const lines = String(markdown).trim().split('\n');
+  let head = `# ${fallbackTitle}`;
+  if (/^#\s+/.test(lines[0] ?? '')) {
+    head = lines.shift().trim();
+  } else if (lines[0] && lines[0].trim().length <= 40 && !/^(?:[-*|>]|\d+[.)、])/.test(lines[0].trim())) {
+    // 桥的输出格式并不稳定：有时给「# 标题」，有时标题是纯文本第一行。
+    // 后者如果不管，标题就退化成占位符（真机踩过：索引里一排「未命名卡片」）。
+    // 排除列表形态用「数字+点/括号」，不能只写 \d —— 「2026-11-05 xxx」这种日期开头的
+    // 标题会被误判成有序列表，结果桥给的好标题被留在正文里当第一行。
+    head = `# ${lines.shift().trim()}`;
+  }
+  return [head, '', `- 来源：${source}`, `- 摄入时间：${at}`, `- 密级：${level}`, '', ...lines]
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+const stamp = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` +
+  ` ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+// 超长材料按段落切块。原来超过 BODY_CAP 直接进 _too-long —— 真机实测真实长文
+// 4 篇里 3 篇超限，等于「丢一篇长文」这件事根本用不成。现在切块分别提要点再合并。
+// 单段自己就超 cap 的（没有空行的长文本）只能硬切。
+function splitChunks(text, cap = BODY_CAP) {
+  const out = [];
+  const push = (s) => {
+    if (s.length <= cap) {
+      out.push(s);
+      return;
+    }
+    for (let i = 0; i < s.length; i += cap) out.push(s.slice(i, i + cap));
+  };
+  let cur = '';
+  for (const p of String(text).split(/\n{2,}/)) {
+    if (cur && cur.length + p.length + 2 > cap) {
+      push(cur);
+      cur = p;
+    } else {
+      cur = cur ? `${cur}\n\n${p}` : p;
+    }
+  }
+  if (cur.trim()) push(cur);
+  return out.filter((c) => c.trim().length > 0);
+}
+
+const POINTS_PROMPT = (title, i, n) =>
+  `这是《${title}》的第 ${i}/${n} 段。请**只**提取 3-5 条要点，每条一行、以「- 」开头，` +
+  `保留具体数字、专有名词与结论。不要写标题、不要写总结、不要输出别的任何话。\n\n段落：\n`;
+
+const MERGE_PROMPT = (title) =>
+  `下面是同一篇材料《${title}》分段提取的要点。请合并成一张知识卡片，严格满足：` +
+  `① 总字数 ≤1200 字；② 第一行是「# <卡片标题>」，标题一句话说清这是什么；` +
+  `③ 依次有小节：一句话结论 / 要点（≤5条）/ 值得记的原文片段（没有就写「—」）/ 标签（#开头，2-4个）；` +
+  `④ 去重、按重要性排序，不要出现「第几段」这类分段痕迹。不要输出卡片以外的任何话。\n\n`;
 
 async function processFile(file) {
   const name = path.basename(file);
   if (path.extname(name) !== '.md' || name.startsWith('_')) return;
   log('处理', name);
   const body = await fs.readFile(file, 'utf8');
+  const title = cardTitle(name);
   await beatHere('intake', `摄入 ${name}`);
 
-  if (body.length > BODY_CAP) {
-    log('超长，进 _too-long（桥单问上限内做不了可靠消化）');
+  // 超过「6 段 × 2800 字」才真的放弃（再多，额度与合并质量都撑不住）
+  if (body.length > BODY_CAP * MAX_CHUNKS) {
+    log(`材料 ${body.length} 字，超过 ${BODY_CAP}×${MAX_CHUNKS}，进 _too-long`);
     await move(file, TOOLONG);
     return;
   }
 
-  // L1 隐私闸（execFile 无 shell，正文作为 argv 传递安全；exit 2 = BLOCK）
-  const scan = await runTool('pii-scan.mjs', ['--text', body]);
-  if (scan.code === 2 || /privacy-block|"level"\s*:\s*"L1"|\bBLOCK\b/i.test(scan.stdout)) {
+  // 隐私闸：走 --file 而不是 --text —— 正文作为 argv 传递有长度上限
+  // （Windows 命令行约 32K 字节，中文一段 8000 字就爆），长文必须读文件。
+  const scan = await runTool('pii-scan.mjs', ['--file', file, '--json']);
+  let scanLevel = '';
+  try {
+    scanLevel = JSON.parse(scan.stdout)?.level || '';
+  } catch { /* 解析不了就按空处理，后面按最保守走 */ }
+  if (scan.code === 2 || /"level"\s*:\s*"L1"|\bBLOCK\b/i.test(scan.stdout)) {
     log('命中 L1 硬红线，进 _blocked，不外发');
     await move(file, BLOCKED);
     return;
+  }
+
+  // L2（手机号/工资/病历…）：必须先脱敏再出网。
+  // 踩过：原来只查 L1 就把正文发给外部桥 —— 等价于把软红线原样外发，违反
+  // 「L2 默认本地处理，确需出网必须脱敏」。脱敏失败就进 _blocked，宁可不动。
+  let outbound = body;
+  let level = 'L0 公开';
+  if (scanLevel === 'L2') {
+    const red = await runTool('pii-scan.mjs', ['--file', file, '--redact']);
+    let redacted = '';
+    try {
+      // --redact 的输出是 JSON（redactedText 在里面），不是裸文本。
+      // 直接把 stdout 当正文发出去 = 把一坨 JSON 喂给桥。
+      redacted = JSON.parse(red.stdout)?.redactedText || '';
+    } catch { /* 解析失败按脱敏失败处理 */ }
+    if (!redacted || redacted.length < body.length * 0.3) {
+      log('L2 命中但脱敏失败，进 _blocked（不外发）');
+      await move(file, BLOCKED);
+      return;
+    }
+    outbound = redacted;
+    level = 'L2 已脱敏';
+    log('命中 L2，已脱敏后再送桥');
   }
 
   // 负载闸
@@ -156,16 +253,34 @@ async function processFile(file) {
     return;
   }
 
-  // 桥消化
-  let reply;
-  try {
-    await beatHere('think', `桥消化 ${name}（${SITE}）`);
-    const r = await bridgeAsk(DIGEST_PROMPT(name.replace(/\.md$/, '')) + body);
+  // 桥消化：单段直接出卡；多段先逐段提要点，最后合并成一张卡
+  const chunks = splitChunks(outbound);
+  const ask = async (prompt, label) => {
+    await beatHere('think', label);
+    const r = await bridgeAsk(prompt);
     if (!r.ok) {
       throw new Error(`桥返回 ${r.status}：${r.data?.errorType ?? ''} ${r.data?.message ?? ''}`.trim());
     }
-    reply = String(r.data.answer ?? r.data.text ?? '');
-    if (!reply.trim()) throw new Error('桥回答为空');
+    const ans = String(r.data.answer ?? r.data.text ?? '');
+    if (!ans.trim()) throw new Error('桥回答为空');
+    return ans;
+  };
+
+  let reply;
+  try {
+    if (chunks.length === 1) {
+      reply = await ask(DIGEST_PROMPT(title) + outbound, `桥消化 ${name}（${SITE}）`);
+    } else {
+      log(`材料 ${body.length} 字，分 ${chunks.length} 段消化后合并`);
+      const pts = [];
+      for (let i = 0; i < chunks.length; i += 1) {
+        pts.push(await ask(POINTS_PROMPT(title, i + 1, chunks.length) + chunks[i], `分段 ${i + 1}/${chunks.length}（${SITE}）`));
+      }
+      reply = await ask(
+        MERGE_PROMPT(title) + pts.map((p, i) => `【第 ${i + 1} 段要点】\n${p}`).join('\n\n'),
+        `合并 ${chunks.length} 段（${SITE}）`
+      );
+    }
   } catch (e) {
     const n = await bumpFail(name);
     if (n >= MAX_FAILS) {
@@ -184,11 +299,12 @@ async function processFile(file) {
     const intakePath = await toolPath('intake.mjs');
     const intake = await import(pathToFileURL(intakePath).href);
     const trimmed = reply.length > 4000 ? reply.slice(0, 4000) : reply; // intake 上限内交给它判定
+    const src = `memory/50-inbox/${name}`;
     card = await intake.runIntake({
       root: ROOT,
-      title: name.replace(/\.md$/, ''),
-      source: `autopilot:${SITE}`,
-      body: trimmed,
+      title,
+      source: src,
+      body: withMeta(trimmed, { source: src, at: stamp(), level, fallbackTitle: title }),
     });
     if (!card.ok) throw new Error(card.message ?? card.errorType ?? 'intake 拒绝');
   } catch (e) {
