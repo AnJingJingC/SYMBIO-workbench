@@ -26,6 +26,7 @@ symbio/
 ├── config/
 │   ├── symbio.config.json    ← 体量红线 / 阶段开关 / 成本闸门
 │   ├── pii-rules.json        ← 隐私三级规则（L1/L2/L3）
+│   ├── templates/            ← 出厂模板（宪法/红线/看板/场景五件套），setup --fix 用
 │   └── dsh-settings.snippet.yaml ← 全局安装时的 settings 片段
 ├── memory/                   ← 六层记忆（L0–L5）
 │   ├── 00-constitution/      ← L0 宪法与红线：只有宿主能改
@@ -33,7 +34,7 @@ symbio/
 │   ├── 20-scenes/            ← L2 场景层：一个场景 = 一个项目 = 一个工人
 │   ├── 30-personal/          ← L3 个人层：隔离档案，不参与主线
 │   └── 90-archive/           ← L5 归档层：只加不改
-├── tools/                    ← 零依赖 Node 脚本（体检 / 隐私 / 索引 / 预算闸 / 免费档探针 / 负载闸）
+├── tools/                    ← 零依赖 Node 脚本（初始化 / 体检 / 隐私 / 索引 / 预算闸 / 免费档探针 / 负载闸）
 ├── shell/                    ← 自研壳层骨架（Main/Preload/Renderer + 单站薄壳，免费桥闭环）
 │   ├── main.js / preload.cjs ← 能力与权威 / 安全桥（白名单 app.*）
 │   ├── renderer/             ← 标签栏 + 网格 + 面板注册表（数据驱动）
@@ -117,10 +118,12 @@ symbio/
 - `"ABC"`：全部机制可用（画像 / 零件 / 吞噬进化）
 
 **开工预检（每次重活/付费前只做一次，几秒）**：
-1. `node tools/model-probe.mjs --chain` 取当前可用免费兜底链
-2. `node tools/spend-guard.mjs` 确认不是 STOP
-3. `node tools/load-gate.mjs` 确认不是 warn/stop（机器负载 ≥90% 不派重活、≥95% 连体检都别跑）
-4. 三者都过，再开工；任一异常，先降级或停下问宿主
+1. `node tools/setup.mjs` 确认工作台是完整的（目录 / 场景 / 技能 / 配置）；有 FAIL 先 `--fix`，
+   **别在缺件的工作台上干活**——缺的是目录不是内容，但报出来的症状会像"工具坏了"
+2. `node tools/model-probe.mjs --chain` 取当前可用免费兜底链
+3. `node tools/spend-guard.mjs` 确认不是 STOP
+4. `node tools/load-gate.mjs` 确认不是 warn/stop（机器负载 ≥90% 不派重活、≥95% 连体检都别跑）
+5. 四者都过，再开工；任一异常，先降级或停下问宿主
 
 > 代价说明：spend-guard 管「钱」，load-gate 管「机器」，二者互补。load-gate 退出码 0=可派单 / 10=停止派单 / 20=停重活 / 3=闸门没跑成（按"别派"处理）。
 

@@ -276,7 +276,14 @@ async function readCards(root, issues) {
     items.push({ file: f.name, title, chars: (text ?? '').length });
   }
   items.sort((a, b) => a.file.localeCompare(b.file));
-  const indexText = await readText(root, `${rel}/索引.md`, issues);
+  // 索引是**派生件**（index-build 生成的）：全新工作台"还没有索引"不是故障。
+  // 这里传 null 表示可选资产，不污染缺项清单——否则刚初始化完的面板一开局就挂个红点，
+  // 而用户什么都没做错，只是还没摄入过东西。
+  // 但"已经有卡片却没有索引"是真缺：那时候 intake 本该顺手生成，没生成说明链路断了。
+  const indexText = await readText(root, `${rel}/索引.md`, null);
+  if (indexText === null && items.length > 0) {
+    issues.push({ path: `${rel}/索引.md`, reason: 'ENOENT（有卡片但无索引，跑 node tools/index-build.mjs）' });
+  }
   const generated = /生成于\s*([0-9-]+\s*[0-9:]+)/.exec(indexText ?? '')?.[1] ?? null;
   return {
     available: true,
@@ -322,6 +329,9 @@ const INTERNAL_TOOLS = new Set([
   // 维护类命令：单输入框的工具箱表达不了 --to/--write 这类选择，硬塞会变成看得见点不动。
   // sync-publish 尤其不能做成按钮——一键往另一个仓库拷 98 个文件，不该是误点能触发的操作
   'sync-publish.mjs',
+  // 初始化：一键在工作台根下补建六个目录与出厂文件，且会覆盖判断"哪些是缺失的"。
+  // 做成面板按钮等于让误点能造目录——面板没有任何位置需要它，CLI 才是它的正确形态
+  'setup.mjs',
 ]);
 
 export async function readState(root) {

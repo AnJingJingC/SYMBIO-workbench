@@ -48,6 +48,15 @@ const BLOCKED = path.join(INBOX, '_blocked');
 const FAILED = path.join(INBOX, '_failed');
 const TOOLONG = path.join(INBOX, '_too-long');
 const BODY_CAP = 2800;          // 桥 4000 字上限 − 指令余量
+// 卡片字数上限：**从配置读**，别在代码里写死 1200——改了配置的人会以为生效了。
+const CARD_CAP = await (async () => {
+  try {
+    const cfg = JSON.parse(await fs.readFile(path.join(ROOT, 'config/symbio.config.json'), 'utf8'));
+    return Number(cfg?.limits?.cardMaxChars) || 1200;
+  } catch {
+    return 1200;
+  }
+})();
 const MAX_CHUNKS = 6;           // 分段上限：再多就不值得（额度与合并质量都撑不住）
 const MAX_FAILS = 3;
 
@@ -306,15 +315,60 @@ function splitChunks(text, cap = BODY_CAP) {
   return out.filter((c) => c.trim().length > 0);
 }
 
+/**
+ * 最后一道兜底：模型不肯变短时，按「按重要性排序」的既定约定从尾部删要点。
+ * 只有一种情况会走到这里：卡片超上限、问了两次都不给面子。
+ * 每个小节至少留 2 条——宁可短，也不落一张超限的卡（超限会被 intake 硬拒，
+ * 然后连拒 3 次进 _failed，用户看到的只是"失败"，不知道其实是字数）。
+ * 截断后会在末尾留一行说明，不静默丢内容。
+ */
+function fitCard(text, cap) {
+  const lines = text.split('\n');
+  const bulletIdx = [];
+  for (let i = 0; i < lines.length; i += 1) if (/^\s*[-*]\s+/.test(lines[i])) bulletIdx.push(i);
+  if (bulletIdx.length < 8) return null;
+  const dropped = new Set();
+  const total = () => lines.filter((_, i) => !dropped.has(i)).join('\n').length;
+  const sectionStart = (i) => {
+    for (let k = i; k >= 0; k -= 1) if (/^#{2,3}\s/.test(lines[k])) return k;
+    return -1;
+  };
+  const countIn = (s) => bulletIdx.filter((i) => !dropped.has(i) && sectionStart(i) === s).length;
+  for (let k = bulletIdx.length - 1; k >= 0 && total() > cap; k -= 1) {
+    const i = bulletIdx[k];
+    if (countIn(sectionStart(i)) <= 2) continue;
+    dropped.add(i);
+  }
+  if (total() > cap) return null;
+  const kept = lines.filter((_, i) => !dropped.has(i));
+  kept.push(`- （原文超出单卡上限，已按重要性截断 ${dropped.size} 条低优先要点；完整内容见原文归档）`);
+  return kept.join('\n');
+}
+
 const POINTS_PROMPT = (title, i, n) =>
-  `这是《${title}》的第 ${i}/${n} 段。请**只**提取 3-5 条要点，每条一行、以「- 」开头，` +
-  `保留具体数字、专有名词与结论。不要写标题、不要写总结、不要输出别的任何话。\n\n段落：\n`;
+  `这是《${title}》的第 ${i}/${n} 段。请**只**提取 ${n > 1 ? '2-3' : '3-5'} 条要点，每条一行、以「- 」开头、` +
+  `每条不超过 30 字，保留具体数字、专有名词与结论。不要写标题、不要写总结、不要输出别的任何话。\n\n段落：\n`;
 
 const MERGE_PROMPT = (title) =>
   `下面是同一篇材料《${title}》分段提取的要点。请合并成**一张知识卡片**（注意：是卡片，不是要点列表），严格满足：` +
-  `① 总字数 ≤1200 字；② 第一行是「# <卡片标题>」，标题一句话说清这是什么；` +
+  `① 总字数 ≤1100 字（留出元信息余量，超过 1200 会被落卡闸硬拒）；② 第一行是「# <卡片标题>」，标题一句话说清这是什么；` +
   CARD_SHAPE.replace('③ ', '') +
   `④ 去重、按重要性排序，不要出现「第几段」这类分段痕迹。不要输出卡片以外的任何话。\n\n`;
+
+// 超限时的一次压缩回合。为什么需要它：分段合并出来的卡长度不可控，
+// 9633 字材料分 4 段合并实测出来 1317~1741 字，越过 1200 的硬闸 → intake 直接拒。
+// 重试治不了这个：同样的材料、同样的模型，多半还是那么多字。删冗余才是解法。
+//
+// 注意：第一版提示词写「请只做压缩」，桥返回的反而比原文长 9 字——网页 AI 对
+// "少写点"这类要求基本不执行。所以改成**给死数量**（小节数、条目数、每条字数），
+// 让它有明确的完成标准；仍然不行就退回原版，让 intake 判，不硬塞。
+const SHRINK_PROMPT =
+  `把下面这张卡片**重写成更短的一版**，硬性要求：\n` +
+  `① 保留原有的小节标题（以 ## 开头的行），一个小节都不许删；\n` +
+  `② 每节最多 3 条要点，每条不超过 28 字，以「- 」开头；\n` +
+  `③ 所有数字、版本号、专有名词必须保留；\n` +
+  `④ 正文合计不超过 900 字。\n` +
+  `只输出重写后的卡片，不要解释。\n\n`;
 
 async function processFile(file) {
   const name = path.basename(file);
@@ -344,27 +398,35 @@ async function processFile(file) {
     return;
   }
 
-  // L2（手机号/工资/病历…）：必须先脱敏再出网。
-  // 踩过：原来只查 L1 就把正文发给外部桥 —— 等价于把软红线原样外发，违反
-  // 「L2 默认本地处理，确需出网必须脱敏」。脱敏失败就进 _blocked，宁可不动。
+  // 出网前**一律脱敏**，不再"只有 L2 才脱"。踩过两次：
+  //   1) 最初只查 L1 就把正文发给外部桥 —— 等于把软红线原样外发；
+  //   2) 后来只对 L2 脱敏，于是 L1(示例值)/PASS 的正文把 `AKIA…EXAMPLE` 这种
+  //      串原样送出，被**桥自己的**机密检测拦下（422 secret-blocked）。
+  //      教训：我们放行 ≠ 对方放行。占位化只动"长得像凭据"的片段，语义不受影响。
   let outbound = body;
   let level = 'L0 公开';
-  if (scanLevel === 'L2') {
+  {
     const red = await runTool('pii-scan.mjs', ['--file', file, '--redact']);
-    let redacted = '';
+    let parsed = null;
     try {
       // --redact 的输出是 JSON（redactedText 在里面），不是裸文本。
       // 直接把 stdout 当正文发出去 = 把一坨 JSON 喂给桥。
-      redacted = JSON.parse(red.stdout)?.redactedText || '';
+      parsed = JSON.parse(red.stdout);
     } catch { /* 解析失败按脱敏失败处理 */ }
-    if (!redacted || redacted.length < body.length * 0.3) {
+    const redacted = parsed?.redactedText || '';
+    const nReplaced = Array.isArray(parsed?.replacements) ? parsed.replacements.length : 0;
+
+    if (redacted && redacted.length >= body.length * 0.3) {
+      outbound = redacted;
+      if (nReplaced) {
+        level = scanLevel === 'L2' ? 'L2 已脱敏' : 'L1 示例值已占位';
+        log(`出网前替换 ${nReplaced} 处可疑串（凭据/隐私占位化）`);
+      }
+    } else if (scanLevel === 'L2') {
       log('L2 命中但脱敏失败，进 _blocked（不外发）');
       await move(file, BLOCKED);
       return;
     }
-    outbound = redacted;
-    level = 'L2 已脱敏';
-    log('命中 L2，已脱敏后再送桥');
   }
 
   // 负载闸
@@ -446,6 +508,32 @@ async function processFile(file) {
         return;
       }
       log('重跑后自检通过');
+    }
+    // 超限压缩：分段合并出来的卡经常刚好越过上限（实测 1317 字 / 上限 1200）。
+    // 不管的话 intake 的字数闸会硬拒，连拒 3 次就进 _failed——而重试解决不了，
+    // 同样的材料同样的模型多半还是那么多字。只压一次，压不好就退回原版让 intake 判。
+    if (composed.length > CARD_CAP) {
+      log(`卡片 ${composed.length} 字 > 上限 ${CARD_CAP}，压缩一次`);
+      const beforeReply = reply;
+      const beforeComposed = composed;
+      reply = await ask(SHRINK_PROMPT + reply.slice(0, 6000), `压缩卡片（${SITE}）`);
+      let badAfter = await selfCheck();
+      if (badAfter.length || composed.length > CARD_CAP) {
+        // 模型不听话（实测：让它"只压缩"，返回的还长了 9 字）→ 自己按约定截断
+        const fitted = fitCard(reply, CARD_CAP - 90);
+        if (fitted) {
+          reply = fitted;
+          badAfter = await selfCheck();
+          if (!badAfter.length) log(`压缩未达标，已按优先级截断到 ${composed.length} 字`);
+        }
+      }
+      if (badAfter.length || composed.length > CARD_CAP) {
+        log(`压缩后仍不合格（${badAfter.join('；') || `${composed.length} 字`}）→ 退回压缩前版本`);
+        reply = beforeReply;
+        composed = beforeComposed;
+      } else {
+        log(`压缩成功：${beforeComposed.length} → ${composed.length} 字`);
+      }
     }
     await rememberReply(name, reply);
   } catch (e) {

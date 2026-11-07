@@ -849,3 +849,35 @@ test('数据根未配置时，面板不得把 /state 的 503 判成读取失败'
   assert.match(src, /数据源 未配置/, '顶栏要有「数据源 未配置」字样')
   assert.match(src, /ROOT_SOURCE_LABEL/, '页脚要能说清数据根来源')
 })
+
+test('全新工作台没有索引不算故障；有卡片却没索引才算真缺', async () => {
+  // 这条锁的是「初始化完之后面板开局就挂红点」这个体感问题：
+  // 索引是派生件（index-build 生成），还没摄入过东西时它本来就不该存在。
+  // 但判据不能放宽到"永远不报"，否则链路断了（落了卡却没生成索引）就没人发现。
+  const tmp = await mkdtemp(path.join(os.tmpdir(), 'symbio-fresh-'))
+  try {
+    await mkdir(path.join(tmp, 'memory/20-scenes/knowledge-digest/cards'), { recursive: true })
+
+    const fresh = await readState(tmp)
+    assert.equal(fresh.cards.available, true, '卡片目录在，就是可用状态，不是"读不到"')
+    assert.equal(fresh.cards.total, 0)
+    assert.ok(
+      !fresh.issues.some((i) => String(i.path ?? '').includes('索引.md')),
+      '空卡片目录不得因为缺索引报 issue',
+    )
+
+    await writeFile(
+      path.join(tmp, 'memory/20-scenes/knowledge-digest/cards/2026-01-01-测试.md'),
+      '# 测试卡\n\n正文。\n',
+      'utf8',
+    )
+    const withCard = await readState(tmp)
+    assert.equal(withCard.cards.total, 1)
+    assert.ok(
+      withCard.issues.some((i) => String(i.path ?? '').includes('索引.md')),
+      '有卡片却没有索引必须报出来',
+    )
+  } finally {
+    await rm(tmp, { recursive: true, force: true })
+  }
+})

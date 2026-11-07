@@ -13,7 +13,7 @@ import { listTools, runTool } from './tools.mjs';
 
 export const API_PREFIX = '/api/symbio';
 export const DEFAULT_DATA_ROOT = 'E:/SYMBIO';
-export const VERSION = '0.5.1';
+export const VERSION = '0.5.2';
 
 // 判定"这里是不是一个工作台根"：光有目录不算，得同时有记忆层与工具层。
 // 两个都没有的目录（比如 C:/Windows）绝不会被误认成数据根。

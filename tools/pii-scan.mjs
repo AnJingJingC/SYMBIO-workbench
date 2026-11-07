@@ -72,6 +72,11 @@ function compileRule(p) {
   }
 }
 
+// 官方示例值白名单：规则加载后填充（见 config/pii-rules.json 的 allowlist.exact）。
+// 放行不等于「没看见」——命中的每条都会记进 allowlisted，输出里能看到。
+let ALLOW = new Set();
+const allowlisted = [];
+
 function scanLevel(text, levelDef) {
   const hits = [];
   for (const p of levelDef.patterns || []) {
@@ -85,15 +90,26 @@ function scanLevel(text, levelDef) {
       if (m.index === re.lastIndex) re.lastIndex++;
       if (++guard > 5000) break;
     }
-    if (found.length) {
+    // 官方示例值放行：AWS 文档里那个 AKIAIOSFODNN7EXAMPLE 之类的串，本身就写在
+    // 「这条规则该怎么写」的文档里。一次真机实测里，一篇讨论隐私规则的技术文档
+    // 因为引用了它被判 L1 硬拦——**讨论怎么防泄露，被防泄露机制拦了**。
+    // 只认逐字全等，且放行要记进 allowlisted，不静默。
+    const kept = [];
+    let skipped = 0;
+    for (const f of found) {
+      if (ALLOW.has(f.value)) skipped += 1;
+      else kept.push(f);
+    }
+    if (skipped) allowlisted.push({ id: p.id, count: skipped });
+    if (kept.length) {
       hits.push({
         level: levelDef.label,
         id: p.id,
         kind: p.kind || 'unknown',
         note: p.note || '',
-        count: found.length,
+        count: kept.length,
         // 只在本地终端显示前 6 个字符，避免把全文打出来
-        sampleMasked: found.slice(0, 3).map((f) => maskValue(f.value)),
+        sampleMasked: kept.slice(0, 3).map((f) => maskValue(f.value)),
       });
     }
   }
@@ -197,6 +213,10 @@ function main() {
     process.exit(0);
   }
 
+  // 官方示例值白名单（只认逐字全等，不做前缀匹配）
+  ALLOW = new Set((rules.allowlist?.exact || []).map((v) => String(v)));
+  allowlisted.length = 0;
+
   const hits = [];
   for (const key of ['L1', 'L2', 'L3']) {
     const lv = rules.levels?.[key];
@@ -244,6 +264,12 @@ function main() {
     result.ruleErrors = ruleErrors;
     result.hint = `⚠ 有 ${ruleErrors.length} 条规则编译失败，未参与匹配（见 ruleErrors）。此时 PASS 不代表安全。`;
     console.error(`⚠ 规则编译失败 ${ruleErrors.length} 条：${ruleErrors.map((r) => `${r.id} (${r.error})`).join('；')}`);
+  }
+
+  if (allowlisted.length) {
+    const n = allowlisted.reduce((a, x) => a + x.count, 0);
+    result.allowlisted = allowlisted;
+    result.allowlistNote = `${n} 处命中是公开示例值（allowlist.exact），已放行且不外发；如认为不该放行，从 config/pii-rules.json 的 allowlist 里删掉该串。`;
   }
 
   if (args.redact && verdict !== 'BLOCK') {

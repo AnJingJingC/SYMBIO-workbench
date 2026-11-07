@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "$comment": "SYMBIO 花费台账（本地，人可读可手改）。每笔付费调用后执行：node tools/spend-guard.mjs --record <CNY>",
+  "$generatedBy": "tools/setup.mjs --fix",
+  "currency": "CNY",
+  "days": {}
+}
