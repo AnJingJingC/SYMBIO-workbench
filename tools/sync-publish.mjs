@@ -34,15 +34,21 @@ const RULES = [
   ['workbench/README.md', 'README.md'],
   ['workbench/LICENSE', 'LICENSE'],
   ['workbench/INSTALL-PROMPT.txt', 'INSTALL-PROMPT.txt'],
-  // INSTALL.md 原本只存在于发布仓（没有正本），改一次就没人知道另一处是旧的——
-  // 已收回主仓 workbench/INSTALL.md 作正本，此后每次同步都以主仓为准
-  ['workbench/INSTALL.md', 'INSTALL.md'],
+  // INSTALL.md 只留仓库根这一份正本。曾经在 workbench/ 下也放过一份，结果
+  // 两边各自被改（根版加了 setup.mjs 的初始化流程，workbench 版还是旧的），
+  // 同步时又认 workbench 那份——发布出去的是旧文档，新功能等于没做。
+  // 两份副本本身就是 bug，删掉一份比同步两份可靠。
+  ['INSTALL.md', 'INSTALL.md'],
   ['tools', 'tools'],
   ['config', 'config'],
   ['docs', 'docs'],
   ['.dsh/skills', '.dsh/skills'],
   ['shell', 'shell'],
   ['AGENTS.md', 'AGENTS.md'],
+  // 只放这一个 .cmd：它是唯一用 %~dp0 的（跟着自己的位置走，换盘换目录都能用）。
+  // 其余几个（装计划任务 / 无人循环 / 桥校准 / 推发布仓）都写死了 E:\SYMBIO，
+  // 发给别人等于给一个点了就报错的按钮——不如不给，文档里给 node 命令。
+  ['0-初始化工作台.cmd', '0-初始化工作台.cmd'],
   // 行尾策略也要跟着走：发布仓没有它，Windows 上 clone 出来就是 CRLF，
   // 再打包得到的字节与仓库根那份不一致
   ['.gitattributes', '.gitattributes'],
