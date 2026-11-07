@@ -63,7 +63,9 @@
 
 ```bash
 # 1) 身份证 → 应 BLOCK，退出码 2
-node tools/pii-scan.mjs --text "110101199003074567"
+#    示例里不写真号码：闸门分不清「示例」和「真号」，这是设计而非缺陷。
+#    用你自己的号码测（测完这条命令留在 shell 历史里也无妨，没落盘）。
+node tools/pii-scan.mjs --text "<你的18位身份证号>"
 echo $?        # 期望 2
 
 # 2) 手机号 → 应 REDACT，并给出占位符

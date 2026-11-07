@@ -243,6 +243,29 @@ const cardTitle = (name) =>
 const SECTIONS = ['一句话结论', '要点', '值得记的原文片段', '标签'];
 const BULLET_SECTIONS = ['要点', '值得记的原文片段'];
 
+// 掐掉桥的会话尾巴。桥是网页对话模型，答完正事经常补一句「需要我帮你…吗？」，
+// 这句话会原样落进卡片——知识卡不该管人说话。只掐**尾部**、只掐明确像聊天的话，
+// 正文中段出现这些词不动（可能是原文引述）。
+const CHATTER_RE = /(需要我|要不要我|如果你需要|希望这(对|份|篇)|祝使用愉快|我可以继续|帮我提取|帮你提取|帮你补全)/;
+const CHATTER_END_RE = /(?:吗\?|吗？|吧[!！]?|哦[~～]?)\s*$/;
+function stripChatter(lines) {
+  const out = [...lines];
+  while (out.length) {
+    const last = out[out.length - 1].trim();
+    if (!last) {
+      out.pop();
+      continue;
+    }
+    if (/^#{1,6}\s/.test(last)) break; // 掐到小节标题就停，别把正文截残
+    if (CHATTER_RE.test(last) || (last.length > 12 && CHATTER_END_RE.test(last))) {
+      out.pop();
+      continue;
+    }
+    break;
+  }
+  return out;
+}
+
 function normalizeSections(lines) {
   const out = lines.map((l) => {
     const t = l.trim();
@@ -281,7 +304,7 @@ function withMeta(markdown, { source, at, level, fallbackTitle }) {
     // 标题会被误判成有序列表，结果桥给的好标题被留在正文里当第一行。
     head = `# ${lines.shift().trim()}`;
   }
-  return [head, '', `- 来源：${source}`, `- 摄入时间：${at}`, `- 密级：${level}`, '', ...normalizeSections(lines)]
+  return [head, '', `- 来源：${source}`, `- 摄入时间：${at}`, `- 密级：${level}`, '', ...normalizeSections(stripChatter(lines))]
     .join('\n')
     .replace(/\n{3,}/g, '\n\n');
 }
