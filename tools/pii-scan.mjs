@@ -266,6 +266,19 @@ function main() {
     console.error(`⚠ 规则编译失败 ${ruleErrors.length} 条：${ruleErrors.map((r) => `${r.id} (${r.error})`).join('；')}`);
   }
 
+  // L2 里也有同一类「只提到词、没给值」的情况（体检报告 / 工资 / 病历 …）。
+  // 判据与 L1 一致：这一层只有 keyword 一种命中，且没有更高级别的真值命中。
+  // 为什么要标出来：体检报告要回答「有没有 L2 内容漏进可同步文件」，
+  // 而「卡片里出现『体检报告』四个字」不是泄露。不标这一位，体检就只剩误报可用。
+  // 注意：标记不等于放行——verdict 仍是 REDACT，出网仍要脱敏；只是让调用方能分辨。
+  const l2Hits = hits.filter((h) => h.level === (rules.levels?.L2?.label || 'L2'));
+  const l2Real = l2Hits.filter((h) => h.kind !== 'keyword');
+  if (!hasL1 && l2Hits.length && !l2Real.length && !l1Real.length) {
+    for (const h of l2Hits) h.keywordOnly = true;
+    result.keywordOnly = true;
+    result.note = `仅命中 L2 关键词（${l2Hits.map((h) => h.id).join('、')}），未命中任何带值的格式 → 按"提及"处理，不是泄露。`;
+  }
+
   if (allowlisted.length) {
     const n = allowlisted.reduce((a, x) => a + x.count, 0);
     result.allowlisted = allowlisted;
