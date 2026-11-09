@@ -78,6 +78,10 @@ function main() {
   const day = ledger.days[t];
   const spend = Number(day.spendCNY || 0);
   const pct = budget > 0 ? spend / budget : 0;
+  // 免费桥不吃钱，但调用次数是真的。空着会让人以为"从没调过"，也看不出换站有没有生效。
+  const free = day.free && typeof day.free === 'object' ? day.free : null;
+  const freeCalls = Number(free?.calls || 0);
+  const freeFailed = Number(free?.failed || 0);
 
   // 免费档健康（只对 catalog 内“在编模型”下判断，避免把历史/退役模型算进来）
   const avail = readJson(path.join(OFM_DIR, 'availability.json'), { results: {} });
@@ -143,6 +147,8 @@ function main() {
     spendCNY: +spend.toFixed(2),
     budgetCNY: budget,
     usedPercent: +(pct * 100).toFixed(1),
+    freeCalls,
+    freeFailed,
     failPct: failPct == null ? null : +failPct.toFixed(1),
     freeAlive: alive,
     freeDead: dead.length,
@@ -160,6 +166,12 @@ function main() {
   console.log('\n=== SYMBIO 预算硬闸 ===\n');
   console.log(`日期：${t}    判定：${verdict}`);
   console.log(`今日花费：¥${out.spendCNY} / ¥${budget}（${out.usedPercent}%）`);
+  if (freeCalls) {
+    const dist = Object.entries(free.bySite || {})
+      .map(([s, c]) => `${s}×${c.calls}${c.failed ? `(失败${c.failed})` : ''}`)
+      .join(' · ');
+    console.log(`今日免费桥：${freeCalls} 次（失败 ${freeFailed}）${dist ? `　${dist}` : ''}　—— 不吃钱，只记用量`);
+  }
   if (failPct != null) console.log(`近 3 日整体失败率（含死模重试）：${out.failPct}%`);
   console.log(`免费档（在编）：可用 ${alive} 个；已死 ${dead.length} 个`);
   if (dead.length) console.log(`已死：${dead.slice(0, 6).join(', ')}${dead.length > 6 ? ' …' : ''}`);

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "$comment": "SYMBIO 花费台账（本地，人可读可手改）。每笔付费调用后执行：node tools/spend-guard.mjs --record <CNY>",
+  "$comment": "SYMBIO 花费台账（本地，人可读可手改）。每笔付费调用后执行：node tools/spend-guard.mjs --record <CNY>。免费桥不吃钱，但 autopilot 会把当日用量记进 days[日期].free（calls / failed / bySite）：钱和次数分开记，free 不参与预算判定。",
   "$generatedBy": "tools/setup.mjs --fix",
   "currency": "CNY",
   "days": {}

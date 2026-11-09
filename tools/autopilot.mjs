@@ -72,6 +72,55 @@ const BEAT_SCENE = 'knowledge-digest';
 const BEAT_TTL = 240_000;
 const beatHere = (phase, detail) => beat({ scene: BEAT_SCENE, phase, detail, ttlMs: BEAT_TTL, rootDir: ROOT });
 
+// ── 免费桥的用量记账 ────────────────────────────────────────────────────────
+// 桥不吃钱，所以以前台账里一个数都没有：跑了几百次，看起来像"从没调用过"。
+// 但调用次数、失败数、各站分布是真实发生的事，也是换站策略好不好使的唯一证据。
+// 记进花费台账的 days[date].free（钱仍然独立：free 不参与预算判定）。
+const LEDGER = path.join(ROOT, 'memory/10-shared/花费台账.json');
+const FREE = { calls: 0, failed: 0, bySite: {} };
+function countFree(site, ok) {
+  const s = site || 'unknown';
+  FREE.calls += 1;
+  if (!ok) FREE.failed += 1;
+  const row = FREE.bySite[s] || (FREE.bySite[s] = { calls: 0, failed: 0 });
+  row.calls += 1;
+  if (!ok) row.failed += 1;
+}
+function todayLocal() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+async function recordFreeUsage() {
+  if (!FREE.calls) return;
+  let ledger;
+  try {
+    ledger = JSON.parse(await fs.readFile(LEDGER, 'utf8'));
+  } catch {
+    ledger = { version: 1, currency: 'CNY', days: {} };
+  }
+  if (!ledger.days || typeof ledger.days !== 'object') ledger.days = {};
+  const day = todayLocal();
+  if (!ledger.days[day]) ledger.days[day] = { spendCNY: 0, calls: 0, failures: 0, entries: [] };
+  const d = ledger.days[day];
+  const free = d.free || (d.free = { calls: 0, failed: 0, bySite: {} });
+  free.calls += FREE.calls;
+  free.failed += FREE.failed;
+  for (const [site, c] of Object.entries(FREE.bySite)) {
+    const row = free.bySite[site] || (free.bySite[site] = { calls: 0, failed: 0 });
+    row.calls += c.calls;
+    row.failed += c.failed;
+  }
+  free.updatedAt = new Date().toISOString();
+  // 先写临时文件再改名：这个文件面板会读，写到一半被杀不能留半截 JSON。
+  await fs.mkdir(path.dirname(LEDGER), { recursive: true });
+  const tmp = `${LEDGER}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8');
+  await fs.rename(tmp, LEDGER);
+  const dist = Object.entries(FREE.bySite).map(([s, c]) => `${s}×${c.calls}${c.failed ? `（失败 ${c.failed}）` : ''}`).join(' · ');
+  log(`本轮免费桥：${FREE.calls} 次 / 失败 ${FREE.failed}（${dist}），已记入花费台账`);
+}
+
 async function ensureDirs() {
   for (const d of [INBOX, DONE, BLOCKED, FAILED, TOOLONG]) {
     await fs.mkdir(d, { recursive: true });
@@ -128,14 +177,24 @@ async function runTool(script, args_) {
 }
 
 async function bridgeAsk(question, site = SITE) {
-  const res = await fetch(`${BRIDGE}/webai/ask`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ site, question }),
-    signal: AbortSignal.timeout(200_000),
-  });
-  const data = await res.json().catch(() => ({}));
-  return { status: res.status, ok: res.ok && data.ok !== false, data };
+  try {
+    const res = await fetch(`${BRIDGE}/webai/ask`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ site, question }),
+      signal: AbortSignal.timeout(200_000),
+    });
+    const data = await res.json().catch(() => ({}));
+    const ok = res.ok && data.ok !== false;
+    countFree(site, ok);
+    return { status: res.status, ok, data };
+  } catch (e) {
+    // 首帧超时、连接被拒时 fetch 是**抛异常**，不是返回错误码。
+    // 原来这一抛会把整篇材料判死进 _failed——而超时恰恰是网页桥最常见的失败，
+    // 换站兜底必须把这种情况算作"这个站没通"，交给外层切下一个站。
+    countFree(site, false);
+    return { status: 0, ok: false, data: { errorType: 'fetch-failed', message: String(e?.message ?? e) } };
+  }
 }
 
 // ── 归属自检 ────────────────────────────────────────────────────────────────
@@ -630,6 +689,8 @@ async function sweep() {
   }
   // 一轮结束就熄灯：空转时的灯必须是灭的，否则"亮着"就没有信息量了
   await clearBeat({ scene: BEAT_SCENE, rootDir: ROOT });
+  // 记账放在熄灯之后：台账写失败不能影响这一轮已经落好的卡。
+  try { await recordFreeUsage(); } catch (e) { log('免费桥用量入账失败（不影响落卡）：', e.message); }
   return files.length;
 }
 
