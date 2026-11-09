@@ -26,7 +26,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { beat, clearBeat } from './lib/heartbeat.mjs';
+import { beat, clearBeat, pruneBeats } from './lib/heartbeat.mjs';
 
 const execFileP = promisify(execFile);
 
@@ -707,6 +707,9 @@ async function sweep() {
   }
   // 一轮结束就熄灯：空转时的灯必须是灭的，否则"亮着"就没有信息量了
   await clearBeat({ scene: BEAT_SCENE, rootDir: ROOT });
+  // 顺手清掉其他场景遗留的过期心跳：它们不会被任何人清，攒着就是面板上
+  // 那句永久挂着的「N 个心跳已过期」。新鲜的（比如别人刚开始的动作）不碰。
+  try { await pruneBeats({ rootDir: ROOT }); } catch { /* 清垃圾失败不影响落卡 */ }
   // 记账放在熄灯之后：台账写失败不能影响这一轮已经落好的卡。
   try { await recordFreeUsage(); } catch (e) { log('免费桥用量入账失败（不影响落卡）：', e.message); }
   return files.length;

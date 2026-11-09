@@ -21,7 +21,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { root, flag, has, esc, readText, readJson } from './lib/common.mjs';
-import { beat } from './lib/heartbeat.mjs';
+import { beat, clearBeat, pruneBeats } from './lib/heartbeat.mjs';
 
 const execFileP = promisify(execFile);
 const SCENES = 'memory/20-scenes';
@@ -239,6 +239,9 @@ export async function routeText(text, { dry = false, site = 'qianwen', rootDir =
     result.ok = false;
     result.errorType = 'unroutable';
     result.message = `判不出该交给谁：${result.reason}。已停止，不硬猜。\n可用场景：${result.scenes.join(' / ')}\n可以直接指定：node tools/bus.mjs dispatch --from <你> --to <场景> --task "..."`;
+    // 这条路径也走过桥判定（think 灯亮过），返回前同样要灭
+    await clearBeat({ scene: SELF, rootDir: home });
+    await pruneBeats({ rootDir: home });
     return result;
   }
 
@@ -254,9 +257,16 @@ export async function routeText(text, { dry = false, site = 'qianwen', rootDir =
       rootDir: home,
     });
     if (result.dispatched && result.dispatched.ok === false) result.ok = false;
+    // 派单是一次瞬时动作：写完就该灭灯。不灭的后果不是"灯还亮着"这么轻——
+    // 心跳文件留在那儿过期后变成 stale，面板上就永久挂一句「N 个心跳已过期」，
+    // 而 11-07 那次派单的 route.json 直到今天还在冒充"派单中"。
   } else {
     await beat({ scene: SELF, phase: 'idle', detail: `路由（dry）：${result.scene}`, ttlMs: 20_000, rootDir: home });
   }
+
+  if (!dry) await clearBeat({ scene: SELF, rootDir: home });
+  // 顺手清理历史过期心跳（新鲜的不会被碰），否则 stale 计数只增不减
+  await pruneBeats({ rootDir: home });
 
   return result;
 }

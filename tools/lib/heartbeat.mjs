@@ -96,3 +96,41 @@ export async function clearBeat({ scene, rootDir = null } = {}) {
     return false;
   }
 }
+
+/**
+ * 清掉**已过期**的心跳文件，返回删掉的条数。
+ *
+ * 为什么需要：心跳文件只会过期、从来不会被删除，于是 `stale` 计数只增不减——
+ * 面板上那句「N 个心跳已过期」会永久挂着，越用越多，最后变成噪音。
+ * 过期的文件本来就不计入 active，删掉它不影响任何判断，只是不再唠叨。
+ *
+ * 只删 `age > ttl` 的：新鲜的心跳哪怕 phase 是 idle 也一律不动（它可能就是
+ * 别人刚留下的痕迹）。读不出来的坏文件一并清掉——它永远不会变成有效心跳。
+ */
+export async function pruneBeats({ rootDir = null, now = Date.now() } = {}) {
+  const home = rootDir || root();
+  const dir = path.join(home, HEARTBEAT_DIR);
+  let names = [];
+  try {
+    names = (await fs.readdir(dir)).filter((n) => n.endsWith('.json'));
+  } catch {
+    return 0;
+  }
+
+  let removed = 0;
+  for (const name of names) {
+    const file = path.join(dir, name);
+    const rec = await readJson(file);
+    const age = rec?.at ? now - Date.parse(rec.at) : NaN;
+    const ttl = Number(rec?.ttlMs) > 0 ? Number(rec.ttlMs) : DEFAULT_TTL_MS;
+    const expired = !rec || !Number.isFinite(age) || age > ttl;
+    if (!expired) continue;
+    try {
+      await fs.unlink(file);
+      removed += 1;
+    } catch {
+      /* 删不掉就算了，灯的事不能拖住活 */
+    }
+  }
+  return removed;
+}
