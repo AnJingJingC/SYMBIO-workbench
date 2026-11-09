@@ -48,6 +48,12 @@ export async function beat({ scene = 'shared', phase = 'idle', detail = '', ttlM
   try {
     await ensureDir(path.dirname(file));
     await writeJsonAtomic(file, record);
+    // 写的时候顺手清掉别人留下的过期文件：否则「最后一个心跳过期」永远没人管，
+    // 面板上「N 个心跳已过期」就成了常态。放在这里而不是只在个别工具里调，
+    // 是因为写心跳的入口会越来越多（bus / route / autopilot / 未来任何工具），
+    // 清理只挂在其中几个上，漏掉的那些就会默默攒垃圾。
+    // 自己刚写的这份是新鲜的，不会被删。
+    await pruneBeats({ rootDir: home });
     return record;
   } catch {
     return null;
