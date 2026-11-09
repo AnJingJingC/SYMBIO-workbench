@@ -214,3 +214,5 @@ cp -r /e/SYMBIO/.dsh/skills/* "$USERPROFILE/.dsh/skills/"
 | 体检报"缺少 定位卡.md" | 场景目录不完整 | 从模板补建；或重新拷一份 `memory/20-scenes/` |
 | 技能名冲突 | 你之前装过同名技能 | 改名（`symbio-xxx` → `symbio2-xxx`），或删旧的 |
 | DSH 提示 frontmatter 字段不认 | 版本差异（`whenToUse` / `customer-invocable`） | 见 `docs/VERIFY.md`，删掉不认的字段即可，不影响功能 |
+| 宿主启动日志里有 `ERR_PNPM_FETCH_404 … symbio-workbench` 和 `profile maintenance frozen` | 宿主每轮启动都想把插件"迁到 generations"并从 npm 重新拉包，而本包不在 npm 上 | **不用管**。已装的那份照常加载（`.generations/desired.json` 与 `live` 都指向它）。要确认加载的是哪版，看面板徽标或 `/api/symbio/health` 的 `version` |
+| 面板顶栏显示「数据源 未配置」 | `SYMBIO_HOME` 与插件配置 `dataRoot` 都没设，且包不在工作台目录旁边 | 设 `SYMBIO_HOME`，或在宿主插件配置里填 `dataRoot`，重启后页脚会显示来源 |
