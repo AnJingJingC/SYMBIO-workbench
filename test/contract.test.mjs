@@ -268,7 +268,7 @@ test('ask：桥不可达时 503 且明确说没发出去，绝不编造回答', 
   const ask = routes.find(r => r.path === `${API_PREFIX}/ask`)
   const req = new Request('http://local/api/symbio/ask', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ site: 'doubao', question: '只回答四个字：挂载成功' }),
+    body: JSON.stringify({ site: 'deepseek', question: '只回答四个字：挂载成功' }),
   })
   const res = await ask.fetch(req)
   assert.equal(res.status, 503)

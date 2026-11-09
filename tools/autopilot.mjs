@@ -39,7 +39,11 @@ const flag = (n) => {
 };
 const ONCE = args.includes('--once');
 const INTERVAL_MS = Math.max(10_000, Number(flag('interval')) || 30_000);
-const SITE = flag('site') || 'doubao';
+// 默认站点按宿主决定用 deepseek；但它和 doubao 在长材料上都出现过 empty-answer 首帧超时。
+// 所以不赌单点：主站失败就按下面的顺序自动换站重试（qianwen 实测最稳，排第一）。
+// 显式 --site 仍然优先，换站链也会自动跳过它。
+const SITE = flag('site') || 'deepseek';
+const FALLBACK_SITES = ['qianwen', 'deepseek', 'doubao', 'zhipu'].filter((s) => s !== SITE);
 const ROOT = process.env.SYMBIO_HOME || 'E:/SYMBIO';
 const BRIDGE = process.env.BRIDGE_URL || 'http://127.0.0.1:31239';
 const INBOX = path.join(ROOT, 'memory/50-inbox');
@@ -123,11 +127,11 @@ async function runTool(script, args_) {
   }
 }
 
-async function bridgeAsk(question) {
+async function bridgeAsk(question, site = SITE) {
   const res = await fetch(`${BRIDGE}/webai/ask`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ site: SITE, question }),
+    body: JSON.stringify({ site, question }),
     signal: AbortSignal.timeout(200_000),
   });
   const data = await res.json().catch(() => ({}));
@@ -463,13 +467,24 @@ async function processFile(file) {
   const chunks = splitChunks(outbound);
   const ask = async (prompt, label) => {
     await beatHere('think', label);
-    const r = await bridgeAsk(prompt);
-    if (!r.ok) {
-      throw new Error(`桥返回 ${r.status}：${r.data?.errorType ?? ''} ${r.data?.message ?? ''}`.trim());
+    // 桥的每个站点都是「已登录网页」的薄壳，登录态会过期、首帧会超时。
+    // 原来一个站点挂了就把整篇丢进 _failed，其实换一个站大概率就能过。
+    const sites = [SITE, ...FALLBACK_SITES];
+    let lastErr = '';
+    for (let i = 0; i < sites.length; i += 1) {
+      const site = sites[i];
+      const r = await bridgeAsk(prompt, site);
+      const ans = r.ok ? String(r.data.answer ?? r.data.text ?? '') : '';
+      if (r.ok && ans.trim()) {
+        if (i > 0) log(`${label}：${SITE} 未通，已自动切到 ${site}`);
+        return ans;
+      }
+      lastErr = r.ok
+        ? '桥回答为空'
+        : `桥返回 ${r.status}：${r.data?.errorType ?? ''} ${r.data?.message ?? ''}`.trim();
+      if (i + 1 < sites.length) log(`${label}：${site} 失败（${lastErr}），换 ${sites[i + 1]} 重试`);
     }
-    const ans = String(r.data.answer ?? r.data.text ?? '');
-    if (!ans.trim()) throw new Error('桥回答为空');
-    return ans;
+    throw new Error(`${sites.length} 个站点均未拿到回答，最后一处：${lastErr}`);
   };
 
   // 整篇消化（含多段）。

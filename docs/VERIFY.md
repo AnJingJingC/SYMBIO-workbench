@@ -54,7 +54,8 @@ user-invocable: true
 ## 附：三个脚本的自检（不依赖 DSH）
 
 ```bash
-node tools/pii-scan.mjs --text "110101199003074567"   # 期望 BLOCK，退出码 2
+node tools/pii-scan.mjs --text "<你的18位身份证号>"   # 期望 BLOCK，退出码 2
+# 示例里不写真号码：闸门分不清「示例」和「真号」，这是设计而非缺陷。
 node tools/pii-scan.mjs --text "你好"                 # 期望 PASS
 node tools/memory-lint.mjs                            # 期望 FAIL 0
 node tools/index-build.mjs                            # 期望生成 cards/索引.md
