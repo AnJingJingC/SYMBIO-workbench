@@ -10,7 +10,7 @@
 // 用法：
 //   node tools/autopilot.mjs --once              # 只处理现有文件后退出（点测用）
 //   node tools/autopilot.mjs                     # 常驻监听（默认 30s 扫描 + fs.watch 即时触发）
-//   node tools/autopilot.mjs --interval 60000 --site deepseek
+//   node tools/autopilot.mjs --interval 60000 --site qianwen
 //
 // 诚实边界（先读再跑）：
 //   1. 依赖伴生桥在线且目标站点已登录（额度耗尽 = 桥报 not-logged-in，本工具不代登录，
@@ -39,11 +39,14 @@ const flag = (n) => {
 };
 const ONCE = args.includes('--once');
 const INTERVAL_MS = Math.max(10_000, Number(flag('interval')) || 30_000);
-// 默认站点按宿主决定用 deepseek；但它和 doubao 在长材料上都出现过 empty-answer 首帧超时。
-// 所以不赌单点：主站失败就按下面的顺序自动换站重试（qianwen 实测最稳，排第一）。
-// 显式 --site 仍然优先，换站链也会自动跳过它。
-const SITE = flag('site') || 'deepseek';
-const FALLBACK_SITES = ['qianwen', 'deepseek', 'doubao', 'zhipu'].filter((s) => s !== SITE);
+// 默认站点按**实测稳定性**选，不按偏好选。
+// 2026-11-10 台账数据：deepseek 10 次调用失败 4（40%，全是 empty-answer 首帧 30000ms 超时），
+// qianwen 5 次 0 失败；且每次失败要白等 30 秒才切站，等于把整轮耗时翻倍。
+// 所以主站让给 qianwen，deepseek 降到备用第一位（它成功率不稳定，但通了就快）。
+// 不赌单点：主站失败就按下面的顺序自动换站重试。
+// 显式 --site 仍然优先，换站链也会自动跳过它（所以列表留全四站，filter 负责剔除）。
+const SITE = flag('site') || 'qianwen';
+const FALLBACK_SITES = ['deepseek', 'qianwen', 'doubao', 'zhipu'].filter((s) => s !== SITE);
 const ROOT = process.env.SYMBIO_HOME || 'E:/SYMBIO';
 const BRIDGE = process.env.BRIDGE_URL || 'http://127.0.0.1:31239';
 const INBOX = path.join(ROOT, 'memory/50-inbox');

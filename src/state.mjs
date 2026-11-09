@@ -368,12 +368,22 @@ export async function readState(root) {
   }
 
   let skills = null;
+  let skillStages = null;
   let tools = null;
   try {
     skills = (await readdir(path.join(root, '.dsh/skills'), { withFileTypes: true }))
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
       .sort();
+    // 每个技能的阶段（A 通用核心 / B 场景 / C 按设计未启用）。
+    // C 层的三件（画像 / 零件 / 演化）会改写宿主画像或联网抓外部东西，
+    // 默认不碰——面板要能把「灰灯」说成「有意关着」而不是「缺件」。
+    skillStages = {};
+    for (const name of skills) {
+      const text = await readText(root, `.dsh/skills/${name}/SKILL.md`, null);
+      const stage = String(text ?? '').match(/^\s{2}stage:\s*["']?([A-Za-z])["']?\s*$/m)?.[1];
+      if (stage) skillStages[name] = stage.toUpperCase();
+    }
   } catch (error) {
     issues.push({ path: '.dsh/skills', reason: error?.code ?? '技能目录不可读' });
   }
@@ -388,7 +398,18 @@ export async function readState(root) {
 
   const day = todayLocal();
   const todayEntry = ledger?.days?.[day] ?? null;
-  const todaySpend = typeof todayEntry === 'number' ? todayEntry : (todayEntry?.totalCNY ?? todayEntry?.spentCNY ?? null);
+  // 台账的字段名一直是 spendCNY（tools/spend-guard.mjs 写的），
+  // 这里原来只认 totalCNY / spentCNY，导致真记账后面板仍显示 0.00。
+  // 保留别名兼容旧台账，但以实际写入方为准。
+  const todaySpend =
+    typeof todayEntry === 'number'
+      ? todayEntry
+      : (todayEntry?.spendCNY ?? todayEntry?.totalCNY ?? todayEntry?.spentCNY ?? null);
+  // 免费桥的调用次数：钱是 0，但"跑过没跑过"是要看得见的，
+  // 否则面板上「今日花费 0.00」和「一次没干」长得一模一样。
+  const todayFree = todayEntry?.free && typeof todayEntry.free === 'object'
+    ? { calls: Number(todayEntry.free.calls || 0), failed: Number(todayEntry.free.failed || 0) }
+    : null;
 
   const coreOk = !!config && board !== null && handoff !== null && cards.available;
 
@@ -424,7 +445,7 @@ export async function readState(root) {
         }
       : null,
     ledger: ledger
-      ? { currency: ledger.currency ?? 'CNY', day, todaySpend, daysCount: Object.keys(ledger.days ?? {}).length }
+      ? { currency: ledger.currency ?? 'CNY', day, todaySpend, todayFree, daysCount: Object.keys(ledger.days ?? {}).length }
       : null,
     privacyDoc: redlines ? { loaded: true, chars: redlines.length, excerpt: redlines.slice(0, 360) } : { loaded: false, chars: 0, excerpt: '' },
     redLines,
@@ -437,6 +458,6 @@ export async function readState(root) {
       count: activity.beats.length,
       stale: activity.stale,
     },
-    assets: { skills, tools },
+    assets: { skills, tools, skillStages },
   };
 }

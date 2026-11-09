@@ -145,7 +145,7 @@ function pickJson(raw) {
 }
 
 /** 桥判定：失败一律返回 null（调用方据此退化），不抛异常、不编造。 */
-export async function routeByBridge(text, { rootDir = null, scenes = null, site = 'deepseek', bridgeUrl = null } = {}) {
+export async function routeByBridge(text, { rootDir = null, scenes = null, site = 'qianwen', bridgeUrl = null } = {}) {
   const home = rootDir || root();
   const base = String(bridgeUrl || process.env.BRIDGE_URL || 'http://127.0.0.1:31239').replace(/\/+$/, '');
   if (!(await bridgeHealth(base))) return { scene: null, reason: '桥离线', raw: null };
@@ -195,7 +195,7 @@ async function dispatch({ from, to, task, accept, rootDir }) {
 }
 
 /** 主入口：判定 + （可选）派单。 */
-export async function routeText(text, { dry = false, site = 'deepseek', rootDir = null, accept = '' } = {}) {
+export async function routeText(text, { dry = false, site = 'qianwen', rootDir = null, accept = '' } = {}) {
   const home = rootDir || root();
   const scenes = await loadScenes({ rootDir: home });
   if (!scenes.length) {
@@ -278,7 +278,7 @@ async function main() {
     }
     console.log(`命令路由：一句话 → 派给哪个场景
 
-  node tools/route.mjs "<一句话>" [--dry] [--json] [--site deepseek]
+  node tools/route.mjs "<一句话>" [--dry] [--json] [--site qianwen]
   node tools/route.mjs scenes                     看场景清单与关键词
 
 判定顺序：关键词规则 → 免费 AI 桥 → 判不出来就停（不硬猜）。
@@ -304,7 +304,7 @@ async function main() {
 
   const r = await routeText(TEXT, {
     dry: has(args, 'dry'),
-    site: flag(args, 'site') || 'deepseek',
+    site: flag(args, 'site') || 'qianwen',
     accept: flag(args, 'accept'),
   });
 

@@ -193,9 +193,17 @@ async function makeFixture() {
   await put('memory/20-scenes/knowledge-digest/cards/索引.md', '# 卡片索引\n\n> 由 index-build 生成于 2026-11-04 15:00\n')
   await put('memory/20-scenes/knowledge-digest/cards/2026-11-04-a.md', '# 一张测试卡\n\n正文内容。\n')
   await put('memory/00-constitution/REDLINES.md', '# REDLINES\n\n## 一级红线\n')
-  await put('memory/10-shared/花费台账.json', JSON.stringify({ version: 1, currency: 'CNY', days: {} }))
+  await put('memory/10-shared/花费台账.json', JSON.stringify({
+    version: 1,
+    currency: 'CNY',
+    // 字段名与 tools/spend-guard.mjs 写入的一致（spendCNY / free），
+    // 面板曾经只认 totalCNY / spentCNY，真记账后仍显示 0.00。
+    days: { [new Date().toLocaleDateString('sv-SE')]: { spendCNY: 12.5, free: { calls: 3, failed: 1 } } },
+  }))
   for (const l of EXPECTED_ASSETS.layers) await mkdir(path.join(root, 'memory', l), { recursive: true })
   for (const s of EXPECTED_ASSETS.skills) await mkdir(path.join(root, '.dsh/skills', s), { recursive: true })
+  // C 层技能要能被识出阶段，面板才好把「有意关着」和「缺件」分开
+  await put('.dsh/skills/symbio-portrait/SKILL.md', '---\nname: symbio-portrait\nmetadata:\n  stage: "C"\n---\n\n# 画像\n')
   for (const t of EXPECTED_ASSETS.tools) await put(`tools/${t}.mjs`, '// stub\n')
   return root
 }
@@ -221,6 +229,11 @@ test('解析器：真实文件 → 真实数字，表格/卡片/资产都能对�
     assert.ok(s.memory.totalFiles >= 5)
     assert.equal(s.privacyDoc.loaded, true)
     assert.equal(s.ledger.currency, 'CNY')
+    assert.equal(s.ledger.todaySpend, 12.5, '台账写的是 spendCNY，面板必须认这个字段名')
+    assert.equal(s.ledger.todayFree.calls, 3, '免费桥的调用次数要能读到（钱是 0，但不能显示成没干过）')
+    assert.equal(s.ledger.todayFree.failed, 1)
+    assert.equal(s.assets.skillStages['symbio-portrait'], 'C', 'C 层技能要能读出阶段，否则灰灯没解释')
+    assert.equal(s.assets.skillStages['symbio-intake'], undefined, '没写 stage 的不要瞎猜')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -233,6 +246,7 @@ test('解析器：数据源不可读时如实记 issues，绝不用预期清单�
   assert.ok(s.issues.length >= 5, '每个缺文件都要有原因')
   assert.equal(s.config, null)
   assert.equal(s.assets.skills, null, '不可读时必须是 null，不能填 10 个技能')
+  assert.equal(s.assets.skillStages, null, '技能目录读不到时，阶段也要如实为 null')
   assert.equal(s.assets.tools, null)
   assert.equal(s.cards.available, false)
   assert.equal(s.handoff, null)

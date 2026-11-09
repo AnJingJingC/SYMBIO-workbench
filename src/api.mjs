@@ -13,7 +13,7 @@ import { listTools, runTool } from './tools.mjs';
 
 export const API_PREFIX = '/api/symbio';
 export const DEFAULT_DATA_ROOT = 'E:/SYMBIO';
-export const VERSION = '0.5.3';
+export const VERSION = '0.5.4';
 
 // 判定"这里是不是一个工作台根"：光有目录不算，得同时有记忆层与工具层。
 // 两个都没有的目录（比如 C:/Windows）绝不会被误认成数据根。
@@ -290,8 +290,8 @@ export function createApiRoutes({ bridgeUrl, dataRoot, dataRootSource, selfDir, 
       methods: ['POST'],
       requestBody: 'buffered',
       async fetch(request) {
-        let site = 'deepseek';
-        try { const p = await readJsonBody(request); if (p?.site) site = String(p.site); } catch { /* 默认 deepseek */ }
+        let site = 'qianwen';
+        try { const p = await readJsonBody(request); if (p?.site) site = String(p.site); } catch { /* 默认 qianwen */ }
         try {
           const response = await fetch(`${base}/webai/show?site=${encodeURIComponent(site)}`, { method: 'POST' });
           const body = await response.json();
@@ -307,8 +307,8 @@ export function createApiRoutes({ bridgeUrl, dataRoot, dataRootSource, selfDir, 
       methods: ['POST'],
       requestBody: 'buffered',
       async fetch(request) {
-        let site = 'deepseek';
-        try { const p = await readJsonBody(request); if (p?.site) site = String(p.site); } catch { /* 默认 deepseek */ }
+        let site = 'qianwen';
+        try { const p = await readJsonBody(request); if (p?.site) site = String(p.site); } catch { /* 默认 qianwen */ }
         try {
           const response = await fetch(`${base}/webai/hide?site=${encodeURIComponent(site)}`, { method: 'POST' });
           const body = await response.json();
@@ -375,7 +375,7 @@ export function createApiRoutes({ bridgeUrl, dataRoot, dataRootSource, selfDir, 
         } catch (error) {
           return json({ ok: false, errorType: 'bad-request', message: error?.message ?? '请求体无效' }, 400);
         }
-        const site = typeof payload.site === 'string' && payload.site ? payload.site : 'deepseek';
+        const site = typeof payload.site === 'string' && payload.site ? payload.site : 'qianwen';
         const question = typeof payload.question === 'string' ? payload.question.trim() : '';
         if (!question) return json({ ok: false, errorType: 'bad-request', message: 'question 为空，未发送任何内容。' }, 400);
         if (question.length > 2000) return json({ ok: false, errorType: 'bad-request', message: 'question 超过 2000 字，未发送任何内容。' }, 400);
