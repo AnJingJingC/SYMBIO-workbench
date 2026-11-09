@@ -431,8 +431,23 @@ function fitCard(text, cap) {
   return kept.join('\n');
 }
 
-const POINTS_PROMPT = (title, i, n) =>
-  `这是《${title}》的第 ${i}/${n} 段。请**只**提取 ${n > 1 ? '2-3' : '3-5'} 条要点，每条一行、以「- 」开头、` +
+// 分段条目数**按段长给**，不按段数切成固定的 2-3 条。
+//
+// 上一版是「多段就 2-3 条」，那是为压住合并超限临时降下来的，代价在 7798 字材料上
+// 暴露得很清楚：3 段 × 2-3 条 = 最多 9 条 270 字，材料在「提要点」这一环就丢了九成，
+// 合并那一步再怎么组织也变不回来（落卡 819 字，七项专项附加扣除的金额一个没剩）。
+// 提要点是唯一看过全文的环节，它漏掉的，后面没有机会补。
+//
+// 改为每 ~650 字 1 条，落在 3-6 条：2600 字的段给 4-5 条，要点集 400 字上下，
+// 合并后仍在 1100 字内；真超了还有 SHRINK 兜底——压得掉冗余，变不出没提取的信息。
+const pointsRange = (len, n) => {
+  if (n === 1) return '3-5';
+  const lo = Math.max(3, Math.min(5, Math.round(Number(len) / 650)));
+  return `${lo}-${Math.min(6, lo + 1)}`;
+};
+
+const POINTS_PROMPT = (title, i, n, len) =>
+  `这是《${title}》的第 ${i}/${n} 段。请**只**提取 ${pointsRange(len, n)} 条要点，每条一行、以「- 」开头、` +
   `每条不超过 30 字，保留具体数字、专有名词与结论。不要写标题、不要写总结、不要输出别的任何话。\n\n段落：\n`;
 
 const MERGE_PROMPT = (title) =>
@@ -554,7 +569,7 @@ async function processFile(file) {
     log(`材料 ${body.length} 字，分 ${chunks.length} 段消化后合并`);
     const pts = [];
     for (let i = 0; i < chunks.length; i += 1) {
-      pts.push(await ask(POINTS_PROMPT(title, i + 1, chunks.length) + chunks[i], `分段 ${i + 1}/${chunks.length}（${SITE}）`));
+      pts.push(await ask(POINTS_PROMPT(title, i + 1, chunks.length, chunks[i].length) + chunks[i], `分段 ${i + 1}/${chunks.length}（${SITE}）`));
     }
     return ask(
       MERGE_PROMPT(title) + pts.map((p, i) => `【第 ${i + 1} 段要点】\n${p}`).join('\n\n'),
