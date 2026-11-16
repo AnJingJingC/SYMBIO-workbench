@@ -4,7 +4,7 @@
 // 事实约束：业务数字一律来自 src/state.mjs 的真实文件解析；
 // 读不到 → null + issues，接口如实报，不填兜底假值。
 
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,7 +13,7 @@ import { listTools, runTool } from './tools.mjs';
 
 export const API_PREFIX = '/api/symbio';
 export const DEFAULT_DATA_ROOT = 'E:/SYMBIO';
-export const VERSION = '0.5.4';
+export const VERSION = '0.5.5';
 
 // 判定"这里是不是一个工作台根"：光有目录不算，得同时有记忆层与工具层。
 // 两个都没有的目录（比如 C:/Windows）绝不会被误认成数据根。
@@ -398,6 +398,54 @@ export function createApiRoutes({ bridgeUrl, dataRoot, dataRootSource, selfDir, 
             message: timedOut ? '免费 AI 桥响应超时，未拿到回答。' : '免费 AI 桥未启动或不可达，未发送任何内容。',
           }, 503);
         }
+      },
+    },
+    {
+      // 会话衔接（半自动）：读工作台数据根里真实的「当前交接.md」，拼出一段可直接
+      // 粘进新对话的衔接提示。宿主没有"程序化新建会话"的 API，所以这里**只产出提示**，
+      // 不碰宿主会话、不写文件——新建对话与粘贴由宿主侧人工完成，绝不伪造"一键换对话"。
+      path: `${API_PREFIX}/handoff/prepare`,
+      methods: ['POST'],
+      requestBody: 'buffered',
+      async fetch() {
+        if (!root) return missingRoot();
+        const handoffPath = path.resolve(root, 'memory', '20-scenes', 'knowledge-digest', '当前交接.md');
+        let raw;
+        try {
+          raw = await readFile(handoffPath, 'utf8');
+        } catch (error) {
+          return json({
+            ok: false,
+            errorType: 'handoff-unreadable',
+            message: `读不到交接文件：${error?.code ?? String(error?.message ?? '未知原因')}`,
+            hint: '换会话衔接依赖 memory/20-scenes/knowledge-digest/当前交接.md；请先在该文件写好交接再试。',
+          }, 404);
+        }
+        if (!raw.trim()) {
+          return json({ ok: false, errorType: 'handoff-empty', message: '交接文件为空，未生成衔接提示。' }, 422);
+        }
+        // 交接体积上限：只取 honest 内容，不把整个文件无脑塞进剪贴板。
+        const body = raw.trim().slice(0, 8000);
+        const prompt = [
+          '【SYMBIO 会话衔接】新一轮对话请从这里续上：',
+          '',
+          '以下是上一轮留下的交接（原文摘录，来自本工作台数据根）：',
+          '---',
+          body,
+          '---',
+          '',
+          '请先读上面的「当前状态 / 下一步 / 未决问题 / 关键路径」，再从「下一步」继续。',
+          '如与事实不符，以文件与对话历史为准，不要照抄旧状态当作现状。',
+        ].join('\n');
+        return json({
+          ok: true,
+          prompt,
+          chars: prompt.length,
+          source: 'memory/20-scenes/knowledge-digest/当前交接.md',
+          truncated: raw.trim().length > 8000,
+          mode: 'semi-automatic',
+          hint: '已生成衔接提示。请人工新建对话后粘贴；本接口不新建/命名/归档任何会话。',
+        });
       },
     },
     {

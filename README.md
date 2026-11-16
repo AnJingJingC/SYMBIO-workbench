@@ -1,6 +1,6 @@
-# SYMBIO 工作台 · DSH Desktop 业务面板（v0.5.4）
+# SYMBIO 工作台 · DSH Desktop 业务面板（v0.5.5）
 
-DSH Desktop 的一个工作台插件：**把「你在 DSH 里做的事」摆到四个能看见的地方**——业务面板、右下角常驻状态条、左侧栏入口、协同总览页。装一次，四处同时亮。
+DSH Desktop 的一个工作台插件：**把「你在 DSH 里做的事」摆到五个能看见的地方**——业务面板、右下角常驻状态条、左侧栏入口、协同总览页、会话衔接菜单。装一次，五处同时亮。
 
 在主面板里，长文进 → 六层记忆消化 → 出可检索的知识卡片；另一个场景「深度调研」走同一条链路，问题进 → 有证据的答案出，跨场景派单走文件总线 + 命令路由。
 
@@ -9,9 +9,27 @@ DSH Desktop 的一个工作台插件：**把「你在 DSH 里做的事」摆到�
 - **业务面板**占左侧 60%，**右侧对话完全复用宿主原生 UI**；顶部状态栏吸顶常驻
 - **常驻状态条**（`shell.overlay`）：右下角一条胶囊，跨页可见，**不可点击、不挡任何宿主按钮**
 - **协同总览页**（`sidebar.panellist` + `main`）：侧栏一个准星入口，点开是全局视图——谁在干活、机器扛不扛得住、三层库长什么样
+- **会话衔接菜单**（`sidebar.workspaces.session.menu.item`）：会话「…」菜单里多一项「SYMBIO 换会话衔接」——点它把当前交接拼成一段衔接提示复制到剪贴板，手动新建对话粘贴即可续上（**半自动，不新建/不归档会话**，见下文 v0.5.5）
 - 安装：宿主 `install_local_workbench({ path: "<本包>.tgz", replace: true })`，返回 `applied` **并重启 Harness** 才真正接管（详见 `INSTALL-PROMPT.txt`）；包可直接下载，见下文「安装」
 - 身份：本地安装时由宿主派生为 `local:symbio-workbench`；`repository` 已指向本仓库，供市场索引溯源
-- **读写边界（别被"只读"两个字误导）**：读接口（health / state / activity / load / tools）**只读**业务根——不创建、不迁移、不复制目录树；**写只发生在你按下的两个动作上**：落一张卡（`/intake`）、跑一个工具（`/tools/run`，其中 `intake`、`index-build` 会写盘，白名单外一个都跑不了）。
+- **读写边界（别被"只读"两个字误导）**：读接口（health / state / activity / load / tools / handoff/prepare）**只读**业务根——不创建、不迁移、不复制目录树；**写只发生在你按下的两个动作上**：落一张卡（`/intake`）、跑一个工具（`/tools/run`，其中 `intake`、`index-build` 会写盘，白名单外一个都跑不了）。
+
+---
+
+## v0.5.5 加了什么（会话衔接菜单 · 半自动）
+
+DSH 宿主**没有**「以编程方式新建 / 命名 / 归档会话」的 API（会话相关座位全是 UI 挂载点，见 `tools/dev/slots-map.mjs`）。但座位契约允许插件往会话「…」菜单挂自定义项，且**点击后干什么由插件组件自己决定**——所以这版做的是「动作自持」的半自动衔接：
+
+| 环节 | 谁做 |
+|---|---|
+| 读交接、拼提示 | 我方 `POST /api/symbio/handoff/prepare`（只读，从 `memory/20-scenes/knowledge-digest/当前交接.md` 摘录四段） |
+| 复制到剪贴板 | 我方组件 `navigator.clipboard.writeText`；失败如实标 error，不谎称已复制 |
+| 新建对话 + 粘贴 | **你手动做**（宿主无会话 API，不伪造「一键换对话」） |
+
+- 菜单项用独立 id `symbio-handoff`，不复用宿主 shipped id（pin/rename/fork/archive/session-id），**不 shadow 任何宿主 UI**；`replaceRisk=none`。
+- 提示里附「如与事实不符以文件与对话历史为准」，防止旧交接时间戳被当成现状。
+- 契约 46/46 通过（新增 3 条：五座位注册、衔接动作自持不碰宿主 API、handoff 路由行为）。
+- **真机待验**：本版在本地 API 层与契约层验证通过；「菜单里真的出现按钮 / 点击真的写入剪贴板」需装包后在 DSH Desktop 里点一次确认（会话座位由宿主 `sidebar.workspaces` entry 声明，需其挂载）。
 
 ---
 

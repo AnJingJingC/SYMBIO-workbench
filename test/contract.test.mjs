@@ -153,7 +153,8 @@ test('所有路由都在自己的 /api/symbio/ 前缀下', () => {
     `${API_PREFIX}/activity`, `${API_PREFIX}/load`,
     `${API_PREFIX}/bridge/health`,
     `${API_PREFIX}/bridge/login`, `${API_PREFIX}/bridge/hide`,
-    `${API_PREFIX}/tools`, `${API_PREFIX}/tools/run`, `${API_PREFIX}/ask`, `${API_PREFIX}/intake`,
+    `${API_PREFIX}/tools`, `${API_PREFIX}/tools/run`, `${API_PREFIX}/ask`,
+    `${API_PREFIX}/handoff/prepare`, `${API_PREFIX}/intake`,
   ])
   for (const route of createApiRoutes({})) {
     assert.equal(typeof route.fetch, 'function')
@@ -386,6 +387,44 @@ export async function runIntake({ root, title, source, body }) {
   }
 })
 
+test('handoff/prepare：读真实交接拼提示；缺文件时 404 如实报，不编造、不建会话', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), `symbio-handoff-${Date.now()}`))
+  try {
+    const route = createApiRoutes({ dataRoot: root }).find(r => r.path === `${API_PREFIX}/handoff/prepare`)
+    assert.ok(route, '应有 handoff/prepare 路由')
+
+    // 缺交接文件 → 404 + 明确 hint
+    const missRes = await route.fetch()
+    assert.equal(missRes.status, 404)
+    const miss = await missRes.json()
+    assert.equal(miss.ok, false)
+    assert.equal(miss.errorType, 'handoff-unreadable')
+    assert.ok(miss.hint && miss.hint.includes('当前交接.md'))
+
+    // 写好交接 → 提示含四段、标注半自动、不声称新建会话
+    const abs = path.join(root, 'memory', '20-scenes', 'knowledge-digest', '当前交接.md')
+    await mkdir(path.dirname(abs), { recursive: true })
+    await writeFile(abs, '# 当前交接\n\n## 当前状态\n测试中\n\n## 下一步\n继续推进\n\n## 未决问题\n无\n\n## 关键路径\nmemory/test\n', 'utf8')
+    const okRes = await route.fetch()
+    assert.equal(okRes.status, 200)
+    const ok = await okRes.json()
+    assert.equal(ok.ok, true)
+    assert.equal(ok.mode, 'semi-automatic')
+    for (const seg of ['当前状态', '下一步', '未决问题', '关键路径']) assert.ok(ok.prompt.includes(seg), `提示应含 ${seg}`)
+    assert.ok(ok.hint.includes('人工新建对话'))
+    assert.ok(ok.prompt.includes('继续推进'), '提示应摘录交接正文')
+    assert.equal(ok.truncated, false)
+
+    // 空交接 → 422 不生成空提示
+    await writeFile(abs, '   \n', 'utf8')
+    const emptyRes = await route.fetch()
+    assert.equal(emptyRes.status, 422)
+    assert.equal((await emptyRes.json()).errorType, 'handoff-empty')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('intake 路由：摄入模块缺失 → 503 如实报不可用（不编造落卡成功）', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), `symbio-intake-missing-${Date.now()}`))
   try {
@@ -602,10 +641,10 @@ function makeHarness({ slots = true, get = true } = {}) {
   return { api, calls, slotsStub, dispose }
 }
 
-test('三处座位按官方契约注册：list 用 id、keyed 用 key、id 与 key 同名', () => {
+test('四处座位按官方契约注册：list 用 id、keyed 用 key、id 与 key 同名', () => {
   const { calls } = makeHarness()
-  assert.deepEqual(calls.inject, ['shell.overlay', 'sidebar.panellist', 'main'],
-    '三个座位都要先 inject 再 register（顺序即优先级）')
+  assert.deepEqual(calls.inject, ['shell.overlay', 'sidebar.panellist', 'main', 'sidebar.workspaces.session.menu.item'],
+    '四个座位都要先 inject 再 register（顺序即优先级）')
 
   const by = Object.fromEntries(calls.register.map((r) => [r.opts.name, r.opts]))
   assert.deepEqual(by['shell.overlay'], { name: 'shell.overlay', id: 'symbio-status', order: 900 })
@@ -615,6 +654,25 @@ test('三处座位按官方契约注册：list 用 id、keyed 用 key、id 与 k
   assert.ok(by.main && typeof by.main.key === 'string' && by.main.key.length > 0,
     'main 必须用 key，不能用 id')
   assert.equal(by.main.id, undefined, 'main 传 id 无效，只能传 key')
+  // 会话菜单座位：独立 id，不 shadow 宿主 shipped 项（pin/rename/fork/archive/session-id）
+  const menu = by['sidebar.workspaces.session.menu.item']
+  assert.ok(menu && menu.id === 'symbio-handoff', '会话菜单项用带前缀的独立 id')
+  assert.ok(!['pin', 'rename', 'fork', 'archive', 'session-id'].includes(menu.id),
+    '不得复用宿主 shipped id（会 shadow 宿主自己的菜单项）')
+  assert.ok(typeof menu.label === 'string' && menu.label.length > 0, 'list 座位应给 label')
+  assert.equal(menu.key, undefined, 'list 座位不能用 key')
+})
+
+test('换会话衔接动作自持：走自建 API + 剪贴板，不碰宿主会话 API、不谎称已复制', () => {
+  const src = readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8')
+  assert.ok(src.includes("'/api/symbio/handoff/prepare'"), '必须调我方自建 API 生成提示')
+  assert.ok(/navigator\s*\?\.\s*clipboard\s*\?\.\s*writeText/.test(src), '复制提示走剪贴板 API')
+  assert.ok(/role:\s*'menuitem'/.test(src), '菜单项必须是 role=menuitem 的 button（座位契约）')
+  // 不得调用宿主会话动作（宿主本就没有这些 API）
+  assert.ok(!/createConversation|newConversation|archiveConversation|ctx\.session\./.test(src),
+    '不得假装调用宿主会话 API')
+  // 复制失败要如实降级，不能标成 done
+  assert.ok(/copied\s*\?\s*'done'\s*:\s*'error'/.test(src), '剪贴板不可用时必须标 error，不能谎称成功')
 })
 
 test('拿不到 slots 时只降级附加座位，业务面板照旧挂载', () => {
@@ -632,7 +690,7 @@ test('宿主不提供 ctx.get 时不得抛错（老宿主 / 门面缺失）', ()
 
 test('单个座位 register 抛错不牵连其它座位与业务面板', () => {
   const src = readFileSync(path.join(ROOT, 'lib', 'client.js'), 'utf8')
-  // 只锁行为约定：每个座位各自 try/catch，不是一把 try 包三处
+  // 只锁行为约定：每个座位各自 try/catch，不是一把 try 包全部
   assert.ok(/const seat = \(name, opts, Comp\) => \{\s*try/.test(src.replace(/\r/g, '')),
     '三个座位必须各走一次 try，一处失败不能吞掉其余两处')
   assert.ok(src.includes("console.warn(`[symbio] 座位 ${name} 注册失败"),
