@@ -50,5 +50,7 @@
 
 ## 四、姓名词典
 
-`config/pii-rules.json` 的 `nameDictionary` 里填上真名、家人姓名、常用账号前缀。
+`config/pii-rules.local.json` 的 `nameDictionary` 里填上真名、家人姓名、常用账号前缀。
+（**不是** `pii-rules.json`：那份要进版本库，真名会跟着 git 被提交；本地文件已由 `.gitignore` 排除。）
 不填也能跑（靠字段名识别），但命中率会明显下降——**这是初始化时最值得花 1 分钟的一件事**。
+中文名每条 2 字以上；单字会被拒收，因为它会命中几乎每一篇中文。

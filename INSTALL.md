@@ -144,11 +144,13 @@ cp -r /e/SYMBIO/.dsh/skills/* "$USERPROFILE/.dsh/skills/"
 目录补好了 ≠ 工作台知道你是谁。下面四件事按顺序做，其中**第 1 件最值钱**：
 
 1. **填隐私词典**（强烈建议，1 分钟）
-   打开 `config/pii-rules.json`，把 `nameDictionary` 填成你的真名、家人姓名、常用账号前缀：
+   打开 `config/pii-rules.local.json`，把 `nameDictionary` 填成你的真名、家人姓名、常用账号前缀：
    ```json
-   "nameDictionary": ["张三", "李四"]
+   "nameDictionary": ["张三", "李四", "zhangsan"]
    ```
    这会让 L2 姓名识别从"靠字段名"升级为"靠词典"，命中率显著提高。
+   **为什么单独一个文件**：`pii-rules.json` 要进版本库，真名填进去会跟着 git 一起被提交、一起同步；
+   `pii-rules.local.json` 已被 `.gitignore` 排除，只在本机存在。填完保存即生效，不用重启。
    **不填的症状**：文档里出现你的真名，隐私闸一句都不拦——它认不出来。
 
 2. **填定位卡**（否则 AI 不知道自己该干什么）

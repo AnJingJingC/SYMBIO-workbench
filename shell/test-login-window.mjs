@@ -8,16 +8,23 @@
 //   node shell/test-login-window.mjs                # 默认 doubao，桥在 127.0.0.1:31239
 //   BRIDGE_URL=http://127.0.0.1:31239 node shell/test-login-window.mjs
 //   SITE=tongyi node shell/test-login-window.mjs
+//   node shell/test-login-window.mjs --recheck   # 跨日复验：登录态已过期就直接判 FAIL，不等你重登
 //
-// 退出码：0 = 全部通过；非 0 = 有未过关项（看 stderr）。
+// 两种模式：
+//   默认（首次点测）：未登录会轮询等你手动登录，最多 POLL_CAP_MS，绝不代填账号/验证码。
+//   --recheck（跨日复验）：假设此前已登录过。未登录 = 登录态没跨日保持，立即 FAIL（退出码 3），
+//                         这是复验要捕捉的失效信号，不是脚本故障；手动重登后再跑一次即可销账。
+//
+// 退出码：0 = 全部通过；1 = 有未过关项；2 = 桥/脚本故障；3 = 复验时登录态已失效（需重登）。
 
 import process from 'node:process';
 
 const BASE = (process.env.BRIDGE_URL || 'http://127.0.0.1:31239').replace(/\/+$/, '');
 const SITE = process.env.SITE || 'doubao';
 const ASK = '只回答四个字：收到收到';
-const POLL_MS = 5000;
-const POLL_CAP_MS = 150000; // 最多等 150s 让你手动登录
+const POLL_MS = Number(process.env.POLL_MS || 5000);
+const POLL_CAP_MS = Number(process.env.POLL_CAP_MS || 150000); // 最多等 150s 让你手动登录
+const RECHECK = process.argv.includes('--recheck') || process.env.RECHECK === '1';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.error('→', ...a);
@@ -38,11 +45,13 @@ function check(label, cond, detail = '') {
 }
 
 async function main() {
-  log(`桥 ${BASE} · 站点 ${SITE}`);
+  log(`桥 ${BASE} · 站点 ${SITE} · 模式 ${RECHECK ? '跨日复验（不等待重登）' : '首次点测（可等待重登）'}`);
 
   // 1) 桥在线
   const health = await get('/health');
-  check('桥服务在线 (/health)', health.ok && health.body?.ok, `sites=${JSON.stringify(health.body?.sites || [])}`);
+  // get() 返回 {status, body}，没有 ok 字段。原来写 health.ok 导致这一项永远误报失败——
+  // 全链路明明跑通却 EXIT=1，正是"未验收"迟迟销不掉的原因之一。
+  check('桥服务在线 (/health)', health.status === 200 && !!health.body?.ok, `sites=${JSON.stringify(health.body?.sites || [])}`);
   if (health.status !== 200 || !health.body?.ok) {
     console.error('\n桥没起来：先 `cd E:/SYMBIO/shell && npm run bridge`，再跑本脚本。');
     process.exit(2);
@@ -60,6 +69,14 @@ async function main() {
 
   // 3) 登录态自检：若未登录，轮询等你在窗口里手动登录（绝不代填）
   let login = shown.body;
+  if (login.loginRequired && RECHECK) {
+    // 跨日复验：未登录就是本次要捕捉的失效信号。不等、不代填，如实判失败后收回窗口。
+    check('跨日复验：登录态仍有效', false, '登录态已过期（需登录）——这正是复验要捕捉的失效信号');
+    log('收回窗口（POST /webai/hide）…');
+    await post(`/webai/hide?site=${encodeURIComponent(SITE)}`).catch(() => {});
+    console.error('\n跨日复验结论：FAIL —— 登录态未跨日保持。请在本机窗口手动重登后再跑一次。');
+    process.exit(3);
+  }
   if (login.loginRequired) {
     log(`该站未登录。请在弹出的 ${SITE} 窗口里手动登录（我们不代填、不自动登录）。`);
     log(`轮询登录态，最多等 ${POLL_CAP_MS / 1000}s，登录后会自动继续…`);
@@ -99,6 +116,7 @@ async function main() {
   check('收回成功', hidden.status === 200 && hidden.body?.ok, hidden.body?.message || '');
 
   console.log('\n' + (failed ? `⚠ ${failed} 项未通过` : '✓ 全部通过：开窗 / 登录态自检 / 登录后问答 / 收回 都正常'));
+  if (RECHECK && !failed) console.error('\n跨日复验结论：PASS —— 登录态跨日仍有效，问答链路正常。');
   process.exit(failed ? 1 : 0);
 }
 

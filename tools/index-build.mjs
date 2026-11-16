@@ -83,14 +83,21 @@ function clean(s) {
 }
 
 function tags(text) {
-  const set = new Set();
-  const re = /(?:标签[：:]\s*)?((?:#[\u4e00-\u9fa5A-Za-z0-9_-]+(?:\s+|$))+)/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const parts = m[1].split(/\s+/).filter((t) => t.startsWith('#'));
-    parts.forEach((t) => set.add(t));
+  // 2026-11-11：原来按**空白**切标签，`#AI Agent` 被切成 `#AI`、`Agent` 被丢掉，
+  // 索引里那条 Anthropic 卡片的标签就莫名其妙少了一个词。
+  // 标签的真正分隔符是**下一个 #**，不是空格——一句话里不会有第二个 #。
+  // 另外只在「## 标签」小节里找：整篇扫会把正文里的 # 也算进来。
+  const hasSection = /^##\s+标签\s*$/m.test(text);
+  const sec = hasSection ? text.split(/^##\s+标签\s*$/m)[1].split(/^##\s+/m)[0] : text;
+  const body = sec.replace(/^[\s-]*标签[：:]\s*/m, '');
+  const out = [];
+  for (const raw of body.match(/#[^#\n]+/g) || []) {
+    const t = raw.trim();
+    // 太长的多半是正文里带 # 的句子，不是标签
+    if (t.length < 2 || t.length > 24) continue;
+    out.push(t);
   }
-  return [...set].slice(0, 6).join(' ');
+  return [...new Set(out)].slice(0, 6).join(' ');
 }
 
 function dateOf(name, fallback) {

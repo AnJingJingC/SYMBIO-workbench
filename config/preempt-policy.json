@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "allow": ["宿主"],
+  "maxOpen": 3
+}

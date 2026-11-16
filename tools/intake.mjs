@@ -22,6 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { scanText } from './lib/pii-gate.mjs';
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -65,32 +66,25 @@ async function readConfig(root) {
   }
 }
 
-/** 纯本地跑隐私闸。命中 L1 返回 {blocked:true}，其余返回 {blocked:false}。绝不联网。 */
+/**
+ * 落卡前的隐私闸（纯本地，绝不联网）。三种结局，没有第四种：
+ *   { blocked:true, hits }                      L1 命中
+ *   { blocked:false }                           判过
+ *   { blocked:true, unavailable:true, hint }    **判不出** —— 缺扫描器 / 输出解析不了 / 崩了
+ *
+ * 2026-11-11 改的两处（实装在 tools/lib/pii-gate.mjs 的 scanText）：
+ *   1) 原来只看 text.slice(0,4000)。卡正文上限 1200，所以今天不触发，
+ *      但 cardMaxChars 一旦调大就是静默漏检。改成整段扫：超长走临时文件（argv 有长度上限）。
+ *   2) 原来"缺扫描器 / 解析异常"都按**放行**处理 —— 写卡这一步没有第二道闸，
+ *      放行就等于"闸坏了照样写"。改成判不出就不写（写卡是落盘，不是出网，
+ *      但同样不该在不知道内容是什么的情况下落进可同步的记忆树）。
+ */
+// 闸的实现搬去了 tools/lib/pii-gate.mjs（scanText）：留在 intake 里没法被断言覆盖，
+// 只能靠读源码确认它还在。搬到 lib 之后 selftest 能直接喂它三种坏输入。
 async function privacyGate(root, text) {
-  const scanPath = path.join(root, 'tools', 'pii-scan.mjs');
-  try {
-    await fsp.access(scanPath);
-  } catch {
-    // 缺扫描器时按保守默认放行（不阻断主流程），但报 hint
-    return { blocked: false, hint: 'pii-scan.mjs 缺失，跳过本地隐私闸' };
-  }
-  try {
-    const { stdout } = await execFileP('node', [scanPath, '--text', text.slice(0, 4000), '--json'], {
-      cwd: root, timeout: 30000, maxBuffer: 2 * 1024 * 1024, windowsHide: true,
-    });
-    const r = JSON.parse(stdout);
-    if (r.verdict === 'BLOCK') return { blocked: true, hits: r.hits };
-    return { blocked: false };
-  } catch (e) {
-    // 退出码 2 也会落到这里，但 stdout 仍含 JSON
-    const out = e?.stdout || '';
-    try {
-      const r = JSON.parse(out);
-      if (r.verdict === 'BLOCK') return { blocked: true, hits: r.hits };
-    } catch { /* 解析失败按放行 */ }
-    return { blocked: false, hint: '隐私闸解析异常，按放行处理' };
-  }
+  return scanText({ root, text });
 }
+
 
 function slugify(s) {
   const base = String(s || 'untitled')
@@ -160,6 +154,13 @@ export async function runIntake({ root, title, source, body } = {}) {
   }
 
   const gate = await privacyGate(r, b);
+  if (gate.blocked && gate.unavailable) {
+    return {
+      ok: false, errorType: 'privacy-gate-unavailable',
+      message: `隐私闸判不出结论，未写入任何文件（这不是内容问题，是工具/环境问题）：${gate.hint}`,
+      hint: gate.hint,
+    };
+  }
   if (gate.blocked) {
     return {
       ok: false, errorType: 'privacy-block',

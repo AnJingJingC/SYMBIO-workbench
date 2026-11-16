@@ -2,8 +2,10 @@
 //
 // 链路：memory/50-inbox/*.md（宿主随手丢长文）
 //   → load-gate（CPU/内存过高不派活）
-//   → pii-scan（L1 命中即拦，进 _blocked/）
+//   → pii-scan（三道结局：拦下进 _blocked/；判不出则整轮不外发；只有"判过了"才继续）
 //   → 免费 AI 桥消化（豆包等，要求 ≤1200 字知识卡片格式）
+//   → 自检三闸：归属（挂错材料）/ 结构（不像卡片）/ 复核（数字与专名能否回溯）
+//     不过就带驳回单定向重做一次，仍不过进 _failed/（宁可不落，也不落一张假的）
 //   → tools/intake.mjs 确定性落卡 + 索引重建
 //   → 原文移 _done/（失败 _failed/，超长 _too-long/）
 //
@@ -27,6 +29,12 @@ import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { beat, clearBeat, pruneBeats } from './lib/heartbeat.mjs';
+// 交付审核闸（门下省协议）：本地复核 + 定向驳回单，零网络调用。
+// 放 lib/ 是为了不进面板工具箱——契约测试硬断言 tools 只有 6 个可点工具。
+import { reviewCard, buildRetryDirective, appendReviewLog } from './lib/review.mjs';
+// 外形收口：砍掉「## 标签」之后被桥顺带刮进来的站点 UI 文案。见 lib/card-shape.mjs。
+import { trimTailAfterTags } from './lib/card-shape.mjs';
+import { parseScan, decideEgress } from './lib/pii-gate.mjs';
 
 const execFileP = promisify(execFile);
 
@@ -54,6 +62,10 @@ const DONE = path.join(INBOX, '_done');
 const BLOCKED = path.join(INBOX, '_blocked');
 const FAILED = path.join(INBOX, '_failed');
 const TOOLONG = path.join(INBOX, '_too-long');
+
+// 隐私闸判不出结论时置位。它不是"这一份跳过"，而是**整轮停止外发**：
+// 扫描器崩了是系统性问题，后面每一份都会同样判不出，继续跑等于批量泄。
+let EGRESS_HALT = '';
 const BODY_CAP = 2800;          // 桥 4000 字上限 − 指令余量
 // 卡片字数上限：**从配置读**，别在代码里写死 1200——改了配置的人会以为生效了。
 const CARD_CAP = await (async () => {
@@ -285,6 +297,7 @@ async function checkAttribution(reply, body, source) {
 // 真机踩过：卡片能读，但不像卡片。
 const CARD_SHAPE =
   `③ 小节必须用二级标题，依次是：## 一句话结论 / ## 要点 / ## 值得记的原文片段 / ## 标签；` +
+  ` 「## 一句话结论」下面**只写一行**（≤60 字，不要拆成多行、不要加列表符号）；` +
   `「## 要点」下面每条以「- 」开头，一行一条，≤5 条；` +
   `「## 值得记的原文片段」直接抄原文金句，每条以「- 」开头；` +
   `「## 标签」写 2-4 个以 # 开头的词，不用列表符号。`;
@@ -370,7 +383,13 @@ function withMeta(markdown, { source, at, level, fallbackTitle }) {
     // 标题会被误判成有序列表，结果桥给的好标题被留在正文里当第一行。
     head = `# ${lines.shift().trim()}`;
   }
-  return [head, '', `- 来源：${source}`, `- 摄入时间：${at}`, `- 密级：${level}`, '', ...normalizeSections(stripChatter(lines))]
+  // 站点 UI 文案是在 stripChatter 之后才暴露的：那段话不像"聊天"，像正经句子，
+  // 但它在「## 标签」后面，按卡片契约就不属于卡片。按结构截，不按词表猜。
+  const shaped = trimTailAfterTags(normalizeSections(stripChatter(lines)));
+  if (shaped.dropped.length) {
+    log(`卡片尾部清掉 ${shaped.dropped.length} 行非标签内容（站点文案）：${String(shaped.dropped[0]).slice(0, 30)}…`);
+  }
+  return [head, '', `- 来源：${source}`, `- 摄入时间：${at}`, `- 密级：${level}`, '', ...shaped.lines]
     .join('\n')
     .replace(/\n{3,}/g, '\n\n');
 }
@@ -471,7 +490,8 @@ const SHRINK_PROMPT =
   `① 保留原有的小节标题（以 ## 开头的行），一个小节都不许删；\n` +
   `② 每节最多 3 条要点，每条不超过 28 字，以「- 」开头；\n` +
   `③ 所有数字、版本号、专有名词必须保留；\n` +
-  `④ 正文合计不超过 900 字。\n` +
+  `④ 「## 一句话结论」保持单行、≤60 字，不要因为变短就拆成几行；\n` +
+  `⑤ 正文合计不超过 900 字。\n` +
   `只输出重写后的卡片，不要解释。\n\n`;
 
 async function processFile(file) {
@@ -491,12 +511,20 @@ async function processFile(file) {
 
   // 隐私闸：走 --file 而不是 --text —— 正文作为 argv 传递有长度上限
   // （Windows 命令行约 32K 字节，中文一段 8000 字就爆），长文必须读文件。
-  const scan = await runTool('pii-scan.mjs', ['--file', file, '--json']);
-  let scanLevel = '';
-  try {
-    scanLevel = JSON.parse(scan.stdout)?.level || '';
-  } catch { /* 解析不了就按空处理，后面按最保守走 */ }
-  if (scan.code === 2 || /"level"\s*:\s*"L1"|\bBLOCK\b/i.test(scan.stdout)) {
+  //
+  // 2026-11-11 故障演练改的：这里原来把"解析失败"当成"没命中"，于是
+  //   扫描器 exit 1 / 输出非 JSON / 文件缺失 → 全部走到 outbound = body，
+  //   原文换着 4 个站往外发（实测确认）。规则 24/24 判得对，死在接线。
+  // 现在只有三种结局：出去（脱敏后）、拦下（进 _blocked）、**判不出（整轮停）**。
+  const scanRes = await runTool('pii-scan.mjs', ['--file', file, '--json']);
+  const scan = parseScan(scanRes.stdout);
+  if (!scan.ok) {
+    EGRESS_HALT = scan.reason;
+    const err1 = String(scanRes.stderr || '').trim().split('\n')[0].slice(0, 140);
+    log(`隐私闸不可用（${scan.reason}${err1 ? `；stderr: ${err1}` : ''}；exit ${scanRes.code}），本轮不外发，文件留在 inbox 等下轮`);
+    return;
+  }
+  if (scan.verdict === 'BLOCK') {
     log('命中 L1 硬红线，进 _blocked，不外发');
     await move(file, BLOCKED);
     return;
@@ -507,31 +535,21 @@ async function processFile(file) {
   //   2) 后来只对 L2 脱敏，于是 L1(示例值)/PASS 的正文把 `AKIA…EXAMPLE` 这种
   //      串原样送出，被**桥自己的**机密检测拦下（422 secret-blocked）。
   //      教训：我们放行 ≠ 对方放行。占位化只动"长得像凭据"的片段，语义不受影响。
-  let outbound = body;
-  let level = 'L0 公开';
-  {
-    const red = await runTool('pii-scan.mjs', ['--file', file, '--redact']);
-    let parsed = null;
-    try {
-      // --redact 的输出是 JSON（redactedText 在里面），不是裸文本。
-      // 直接把 stdout 当正文发出去 = 把一坨 JSON 喂给桥。
-      parsed = JSON.parse(red.stdout);
-    } catch { /* 解析失败按脱敏失败处理 */ }
-    const redacted = parsed?.redactedText || '';
-    const nReplaced = Array.isArray(parsed?.replacements) ? parsed.replacements.length : 0;
-
-    if (redacted && redacted.length >= body.length * 0.3) {
-      outbound = redacted;
-      if (nReplaced) {
-        level = scanLevel === 'L2' ? 'L2 已脱敏' : 'L1 示例值已占位';
-        log(`出网前替换 ${nReplaced} 处可疑串（凭据/隐私占位化）`);
-      }
-    } else if (scanLevel === 'L2') {
-      log('L2 命中但脱敏失败，进 _blocked（不外发）');
-      await move(file, BLOCKED);
+  const redRes = await runTool('pii-scan.mjs', ['--file', file, '--redact']);
+  const decision = decideEgress({ scan, redactStdout: redRes.stdout, body });
+  if (!decision.allow) {
+    if (decision.halt) {
+      EGRESS_HALT = decision.reason;
+      log(`隐私闸不可用（${decision.reason}），本轮不外发，文件留在 inbox 等下轮`);
       return;
     }
+    log('命中 L1 硬红线，进 _blocked，不外发');
+    await move(file, BLOCKED);
+    return;
   }
+  const outbound = decision.outbound;
+  const level = decision.level;
+  if (decision.replacements) log(`出网前替换 ${decision.replacements} 处可疑串（凭据/隐私占位化）`);
 
   // 负载闸
   const gate = await runTool('load-gate.mjs', ['--json']);
@@ -542,6 +560,9 @@ async function processFile(file) {
 
   // 桥消化：单段直接出卡；多段先逐段提要点，最后合并成一张卡
   const chunks = splitChunks(outbound);
+  // 记**实际答出来的站**，不是默认站：换站链切到 deepseek 才成功时，
+  // 审核台账写 qianwen 就是假数据，事后查「哪站好用」会被带偏。
+  let lastSite = SITE;
   const ask = async (prompt, label) => {
     await beatHere('think', label);
     // 桥的每个站点都是「已登录网页」的薄壳，登录态会过期、首帧会超时。
@@ -554,6 +575,7 @@ async function processFile(file) {
       const ans = r.ok ? String(r.data.answer ?? r.data.text ?? '') : '';
       if (r.ok && ans.trim()) {
         if (i > 0) log(`${label}：${SITE} 未通，已自动切到 ${site}`);
+        lastSite = site;
         return ans;
       }
       lastErr = r.ok
@@ -564,10 +586,12 @@ async function processFile(file) {
     throw new Error(`${sites.length} 个站点均未拿到回答，最后一处：${lastErr}`);
   };
 
-  // 整篇消化（含多段）。
-  const digest = async () => {
+  // 整篇消化（含多段）。directive 是复核驳回单，只在重做那一次带上。
+  // 桥 question 上限 4000 字，驳回单裁到 700 字，不挤掉材料正文。
+  const digest = async (directive = '') => {
+    const guard = directive ? `${directive.slice(0, 700)}\n\n` : '';
     if (chunks.length === 1) {
-      return ask(DIGEST_PROMPT(title) + outbound, `桥消化 ${name}（${SITE}）`);
+      return ask(guard + DIGEST_PROMPT(title) + outbound, `桥消化 ${name}（${SITE}）`);
     }
     log(`材料 ${body.length} 字，分 ${chunks.length} 段消化后合并`);
     const pts = [];
@@ -575,7 +599,7 @@ async function processFile(file) {
       pts.push(await ask(POINTS_PROMPT(title, i + 1, chunks.length, chunks[i].length) + chunks[i], `分段 ${i + 1}/${chunks.length}（${SITE}）`));
     }
     return ask(
-      MERGE_PROMPT(title) + pts.map((p, i) => `【第 ${i + 1} 段要点】\n${p}`).join('\n\n'),
+      guard + MERGE_PROMPT(title) + pts.map((p, i) => `【第 ${i + 1} 段要点】\n${p}`).join('\n\n'),
       `合并 ${chunks.length} 段（${SITE}）`
     );
   };
@@ -597,6 +621,7 @@ async function processFile(file) {
 
   let reply;
   let composed = '';
+  let reviewRetries = 0;
   const selfCheck = async () => {
     const bad = [];
     const a = await checkAttribution(reply, outbound, name);
@@ -606,6 +631,23 @@ async function processFile(file) {
     composed = compose(reply);
     const s = checkShape(composed);
     if (s) bad.push(`结构：${s}`);
+    // 交付复核（数字/专名能不能回溯到材料）**必须参与裁决**，不能只写台账。
+    // 2026-11-11 演练实测：一张结构完整、数字全靠编的卡（9999/8888/7777 材料里根本没有）
+    // 归属和结构都过得去 → 直接落盘并归档原文，台账里同时记着 REJECT。等于闸门开着但不拦。
+    // 反测过严格度：23 张存量卡 20 PASS / 0 REJECT / 2 未判，把它接进来不会误杀好卡。
+    // 正文都坏了（结构/归属）就不必再算回溯——驳回单里已经写清哪坏了。
+    if (!bad.length) {
+      try {
+        const rv = reviewCard({ card: composed, sourceText: outbound });
+        if (!rv.ok) {
+          for (const r of rv.reasons) bad.push(`复核：${r}`);
+          log(`交付复核 REJECT：可回溯率 ${(rv.grounding * 100).toFixed(0)}%，专名 ${(rv.idGrounding * 100).toFixed(0)}%`);
+        }
+      } catch (e) {
+        // 复核闸自己坏了不能反过来拦住落卡（它只是近似判据），但必须说出来
+        log('复核闸不可用，本篇按「未判」放行：', e.message);
+      }
+    }
     return bad;
   };
 
@@ -613,16 +655,45 @@ async function processFile(file) {
     reply = await digest();
     let bad = await selfCheck();
     if (bad.length) {
-      log(`自检未通过（${bad.join('；')}）；3 秒后整篇重跑一次`);
+      // 原来是「3 秒后整篇盲重跑一次」——同样的材料同样的模型，多半还是同样的毛病。
+      // 换成门下省式定向重做：把「不合格项 / 缺什么 / 怎么改」随 prompt 下发。
+      // 关键：**不增加桥调用次数**（原来也是重跑一次），只是这一跑带着驳回单。
+      let directive = '';
+      try {
+        const rv = reviewCard({ card: composed, sourceText: outbound, reasons: bad });
+        directive = buildRetryDirective({ result: rv, extraReasons: bad });
+        log(`交付复核 ${rv.verdict}：可回溯率 ${(rv.grounding * 100).toFixed(0)}%，专名 ${(rv.idGrounding * 100).toFixed(0)}%，${rv.reasons.length} 条不合格项`);
+      } catch (e) {
+        log('审核闸不可用，退回原盲重跑（不影响本次消化）：', e.message);
+      }
+      reviewRetries = 1;
+      log(`自检未通过（${bad.join('；')}）；3 秒后${directive ? '按驳回单定向重做' : '整篇重跑'}一次`);
       await new Promise((r) => setTimeout(r, 3000));
-      reply = await digest();
+      reply = await digest(directive);
       bad = await selfCheck();
       if (bad.length) {
-        log(`重跑仍未通过（${bad.join('；')}）→ 进 _failed：宁可不动，也不落一张挂错材料或结构坏掉的卡`);
+        log(`重做仍未通过（${bad.join('；')}）→ 进 _failed：宁可不动，也不落一张挂错材料、结构坏掉或数字编出来的卡`);
+        // 没落卡也要留一条台账：否则三天后看到 _failed 里一个文件、啥记录都没有，
+        // 只能重跑一遍才知道当初为什么拒。台账的作用就是回答「为什么不落」。
+        try {
+          await appendReviewLog({
+            at: new Date().toISOString(),
+            name,
+            card: null,
+            verdict: 'REJECT-未落卡',
+            grounding: null,
+            idGrounding: null,
+            sourceCoverage: null,
+            unexplained: [],
+            reasons: bad.slice(0, 5),
+            reviewRetries,
+            site: lastSite,
+          }, ROOT);
+        } catch { /* 台账写不进去不影响已作出的判定 */ }
         await move(file, FAILED);
         return;
       }
-      log('重跑后自检通过');
+      log('定向重做后自检通过');
     }
     // 超限压缩：分段合并出来的卡经常刚好越过上限（实测 1317 字 / 上限 1200）。
     // 不管的话 intake 的字数闸会硬拒，连拒 3 次就进 _failed——而重试解决不了，
@@ -688,6 +759,27 @@ async function processFile(file) {
 
   const target = await move(file, DONE);
   log(`已落卡 ${card.cardFile ?? '?'}；原文归档 ${path.relative(ROOT, target)}`);
+  // 交付复核留痕：本地只读、零网络、不拦截。每篇成功卡都留一条，事后能查
+  // 「这张卡当时到底核出了什么」，而不是只有一句「已落卡」。
+  // 写台账失败绝不能反过来把已经落好的卡判成失败，所以整体 try/catch 包住。
+  try {
+    const rv = reviewCard({ card: composed, sourceText: outbound });
+    await appendReviewLog({
+      at: new Date().toISOString(),
+      name,
+      card: card.cardFile ?? null,
+      verdict: rv.verdict,
+      grounding: rv.grounding,
+      idGrounding: rv.idGrounding,
+      sourceCoverage: rv.sourceCoverage,
+      unexplained: rv.unexplained.slice(0, 10),
+      reviewRetries,
+      site: lastSite,
+    }, ROOT);
+    log(`交付复核 ${rv.verdict}（可回溯率 ${(rv.grounding * 100).toFixed(0)}%，重做 ${reviewRetries} 次）已记入审核台账`);
+  } catch (e) {
+    log('审核台账写入失败（不影响已落卡）：', e.message);
+  }
   // 成功即清失败计数
   try {
     const m = JSON.parse(await fs.readFile(path.join(INBOX, '_fails.json'), 'utf8'));
@@ -703,6 +795,10 @@ async function sweep() {
   } catch { return; }
   const files = entries.filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => path.join(INBOX, e.name));
   for (const f of files) {
+    if (EGRESS_HALT) {
+      log(`隐私闸不可用，本轮剩余 ${files.length - files.indexOf(f)} 份一律不外发（不跳着发）`);
+      break;
+    }
     try { await processFile(f); } catch (e) { log('单文件异常（不中断循环）：', e.message); }
   }
   // 一轮结束就熄灯：空转时的灯必须是灭的，否则"亮着"就没有信息量了

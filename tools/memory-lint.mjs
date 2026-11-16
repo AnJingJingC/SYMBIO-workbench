@@ -12,7 +12,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '..');
+// 业务数据根：与 autopilot / bus / common 一致，优先认 SYMBIO_HOME。
+// 这样自测能把体检指向临时目录，不必为了测一条规则去碰真实记忆。
+const ROOT = process.env.SYMBIO_HOME || path.resolve(__dirname, '..');
 const CFG_PATH = path.join(ROOT, 'config', 'symbio.config.json');
 
 const results = [];
@@ -119,6 +121,121 @@ function main() {
     }
   }
   if (!results.some((r) => r.id === 'index')) add('PASS', 'index', '索引完整或无超量目录');
+
+  // 5.5) 卡片契约（2026-11-11 新增）
+  //
+  // 起因：本工具原来**完全不看卡片内容**。真机往 cards/ 塞 4 张坏卡（正文 1400 字、
+  // 缺 guard/index_updated、written_to 指向别处、中文文件名），体检仍报 FAIL 0。
+  // 而门下省把「memory-lint FAIL 0」当最终裁决 —— 闸门实际上在空转。
+  //
+  // 卡片现有两套形态，都得认，不能只验一种：
+  //   A 型（autopilot/intake 产出）：无 frontmatter，首行 `# 标题`，正文三行元信息，四段
+  //   B 型（旧端迁移 / 人工）：YAML frontmatter，五段（含 出处 / 存疑）
+  // 「一句话结论 > 60 字」记 WARN 不记 FAIL：60 是索引列宽（index-build 截到 60），
+  // 超了只是索引里看不全，卡片本身没错。逼着压短反而会丢掉前提条件。
+  // 存量卡里 22 条结论是 60–90 字的完整表述，压短要丢信息 —— 那是改内容，不该由体检逼着做。
+  const maxChars = limits.cardMaxChars || 1200;
+  const secOf = (body, name) => {
+    const re = new RegExp(`^##\\s+${name}\\s*$`, 'm');
+    return re.test(body) ? body.split(re)[1].split(/^##\s+/m)[0] : null;
+  };
+  const cps = (x) => [...x].length;
+  for (const s of targetScenes) {
+    const cardsDir = path.join(sceneRoot, s, 'cards');
+    if (!fs.existsSync(cardsDir)) {
+      add('WARN', `card:${s}`, `场景 ${s} 下没有 cards/`, '建 cards/ 后跑 node tools/index-build.mjs');
+      continue;
+    }
+    const files = fs.readdirSync(cardsDir).filter((f) => f.endsWith('.md') && f !== '索引.md');
+    let bad = 0;
+    // 场景级的报错（不带具体文件名），和逐张卡的 fail() 分开
+    const failScene = (m, fix) => {
+      bad++;
+      add('FAIL', `card:${s}`, m, fix);
+    };
+    for (const f of files) {
+      const rel = `memory/20-scenes/${s}/cards/${f}`;
+      const t = fs.readFileSync(path.join(cardsDir, f), 'utf8');
+      const ls = t.split(/\r?\n/);
+      const fail = (m, fix) => {
+        bad++;
+        add('FAIL', `card:${s}`, `${f}：${m}`, fix);
+      };
+
+      if (!/^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*\.md$/.test(f)) {
+        fail('文件名不合规范（应为 YYYY-MM-DD-ascii-slug.md）', '改名成 ascii slug，再重建索引');
+      }
+
+      // 分型：首行 --- 且之后能找到闭合 --- 才算 B 型
+      let fm = null;
+      let body = t;
+      if (ls[0] === '---') {
+        const end = ls.indexOf('---', 1);
+        if (end > 0) {
+          fm = {};
+          for (const l of ls.slice(1, end)) {
+            const m = l.match(/^([A-Za-z_]+)\s*:\s*(.*)$/);
+            if (m) fm[m[1]] = m[2].trim();
+          }
+          body = ls.slice(end + 1).join('\n');
+        }
+      }
+
+      const len = cps(body.replace(/\s+/g, ''));
+      if (len > maxChars) fail(`正文 ${len} 字 > ${maxChars} 字上限`, '回去重压：超限说明只抄了笔记，不是消化');
+
+      const concl = secOf(body, '一句话结论');
+      if (concl == null) fail('缺「## 一句话结论」段', '按场景画像.md 的卡片格式补');
+      else {
+        const c = concl.trim();
+        if (!c) fail('「一句话结论」是空的', '补一句实在的结论');
+        else if (cps(c.split(/\r?\n/)[0].trim()) > 60) {
+          // 阈值对齐索引列宽（index-build 截到 60 字）：40~60 字在索引里完整可见，
+          // 报了也没人该改；>60 才是真的只剩半句。判 WARN 不判 FAIL。
+          const n = cps(c.split(/\r?\n/)[0].trim());
+          add('WARN', `card:${s}`, `${f}：一句话结论 ${n} 字 > 60（索引列会截成半句）`, '收进 60 字内，限定条件移进正文');
+        }
+      }
+
+      if (fm) {
+        // B 型契约
+        const need = ['title', 'type', 'source', 'date', 'ingested', 'guard', 'written_to', 'index_updated'];
+        const miss = need.filter((k) => !fm[k]);
+        if (miss.length) fail(`缺必填字段 ${miss.join(', ')}`, '按 场景画像.md 的卡片格式补齐');
+        if (fm.type && fm.type !== 'knowledge-card') fail(`type=${fm.type}，应为 knowledge-card`, '改回 knowledge-card');
+        if (fm.guard && !['none', 'L1', 'L2', 'L3'].includes(fm.guard)) fail(`guard=${fm.guard} 不在枚举内`, '改回 none/L1/L2/L3');
+        if (fm.written_to && fm.written_to !== rel) fail(`written_to 写的是 ${fm.written_to}`, '改成卡片真实相对路径');
+        for (const k of ['出处', '存疑']) if (secOf(body, k) == null) fail(`缺「## ${k}」段`, '按格式补，不许省');
+        if (secOf(body, '关键点') == null && secOf(body, '要点') == null) fail('缺「## 关键点 / 要点」段', '按格式补');
+      } else {
+        // A 型契约
+        if (!/^#\s+\S/.test(t)) fail('缺一级标题（索引标题列会回落成文件名）', '补 `# 标题` 后重建索引');
+        for (const k of ['来源', '摄入时间', '密级']) {
+          if (!new RegExp(`^-\\s*${k}[：:]`, 'm').test(t)) fail(`缺元信息「- ${k}：」`, '按 autopilot 卡片头部补三行元信息');
+        }
+        const pts = secOf(body, '要点');
+        if (pts == null) fail('缺「## 要点」段', '按格式补');
+        else {
+          const n = (pts.match(/^-\s+\S/gm) || []).length;
+          if (n < 3) fail(`要点只有 ${n} 条（应 ≥3）`, '补到 3 条以上，否则这张卡没什么可回看的');
+        }
+        for (const k of ['值得记的原文片段', '标签']) if (secOf(body, k) == null) fail(`缺「## ${k}」段`, '按格式补');
+      }
+    }
+
+    // 索引条数必须和卡片数一致：索引少一条就等于那张卡检索不到
+    const idxPath = path.join(cardsDir, '索引.md');
+    if (fs.existsSync(idxPath)) {
+      // 判据用「第一列是 xxx.md」而不是 `| 20` 前缀：后者只覆盖以日期开头的文件名，
+      // 一旦卡片改名成别的 slug 就静默漏数。与 个人助理 侧同口径。
+      const rows = fs.readFileSync(idxPath, 'utf8').split(/\r?\n/).filter((l) => /^\|\s*[^|]+\.md\s*\|/.test(l)).length;
+      if (rows !== files.length) failScene(`索引 ${rows} 条 ≠ 卡片 ${files.length} 张`, '跑 node tools/index-build.mjs');
+    } else if (files.length) {
+      failScene('没有 索引.md', '跑 node tools/index-build.mjs');
+    }
+
+    if (!bad && files.length) add('PASS', `card:${s}`, `${files.length} 张卡，格式与体量均合规`);
+  }
 
   // 6) 空文件
   for (const f of walk(memRoot)) {

@@ -187,7 +187,7 @@
     "location": "CITY"
   },
   "nameDictionary": [],
-  "$nameDictionary_comment": "把你自己的真名、家人姓名、常用账号前缀填进来，命中率会显著提升。例如 [\"张三\", \"李四\"]",
+  "$nameDictionary_comment": "通用词条放这里（可入库）。**真名/家人姓名/账号前缀请填 config/pii-rules.local.json，不要填这里**——本文件进版本库，真名会跟着 git 一起提交、一起同步。两处会被合并使用：pii-scan 读主文件 + 本地文件后一起编译成 L2 姓名规则（中文按子串、ASCII 加前后边界、长名优先，单字条目拒收）。",
   "egressAllowlist": [],
   "$egressAllowlist_comment": "允许出网的域名白名单，默认空 = 全部禁止外发个人信息。"
 }

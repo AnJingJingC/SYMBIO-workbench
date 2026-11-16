@@ -59,6 +59,11 @@ const SKIP_EXT = new Set(['.tgz', '.log']);
 // 只在本机有意义的开发期探针：读宿主 app.asar、默认路径绑死本机用户名，
 // 进公开库既没用又误导（别人 clone 下来跑不通）。留在私仓即可。
 const SKIP_REL_PREFIX = ['tools/dev/'];
+// 本机私有文件：这些被 .gitignore 排除、定位就是「各自机器自建」，绝不外传。
+// config 整目录在白名单里，目录级排除挡不住里面的单个私有文件——
+// 2026-11-16 发现同步报告把 pii-rules.local.json 列为「新增」，差点把私有词典发布出去。
+// 它现在是空的，但设计上就是用来装真名/家人姓名/账号前缀的，空不代表可以例外。
+const SKIP_REL = new Set(['config/pii-rules.local.json']);
 
 /**
  * 从 .tgz 里读出 package/package.json（只解析 tar 头，不依赖 tar 命令）。
@@ -125,6 +130,7 @@ function skipFile(rel) {
   const parts = rel.split('/');
   if (parts.some((p) => SKIP_DIRS.has(p))) return true;
   if (SKIP_REL_PREFIX.some((p) => rel.startsWith(p))) return true;
+  if (SKIP_REL.has(rel)) return true;
   return SKIP_EXT.has(path.extname(rel).toLowerCase());
 }
 

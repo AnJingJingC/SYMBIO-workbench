@@ -222,11 +222,16 @@ async function runChecks() {
     add('FAIL', 'privacy', '隐私规则', 'config/pii-rules.json 缺失或无法解析', '从仓库恢复');
   } else {
     const dict = Array.isArray(pii.nameDictionary) ? pii.nameDictionary.filter(Boolean) : [];
+    // 真名不该放在这份文件里（它要进版本库）。真实入口是 config/pii-rules.local.json，
+    // 由 .gitignore 排除。体检必须两处都看，否则"填了真名但体检说没填"。
+    const localPii = readJson('config/pii-rules.local.json');
+    const localDict = Array.isArray(localPii?.nameDictionary) ? localPii.nameDictionary.filter(Boolean) : [];
+    const nDict = dict.length + localDict.length;
     const nPat = ['L1', 'L2', 'L3'].reduce((n, k) => n + (pii.levels?.[k]?.patterns?.length || 0), 0);
-    if (!dict.length) {
-      add('WARN', 'privacy', '隐私规则', `${nPat} 条规则可用，但 nameDictionary 是空的`, '把真名/家人姓名/常用账号前缀填进 config/pii-rules.json');
+    if (!nDict) {
+      add('WARN', 'privacy', '隐私规则', `${nPat} 条规则可用，但隐私词典是空的`, '把真名/家人姓名/常用账号前缀填进 config/pii-rules.local.json 的 nameDictionary（该文件不入库）');
     } else {
-      add('PASS', 'privacy', '隐私规则', `${nPat} 条规则，词典 ${dict.length} 项`);
+      add('PASS', 'privacy', '隐私规则', `${nPat} 条规则，词典 ${nDict} 项`);
     }
   }
 
@@ -419,7 +424,7 @@ if (JSON_OUT) {
     console.log(`大部分能一条命令补掉：node tools/setup.mjs --fix`);
   } else if (warns.length) {
     console.log(`\n没有硬故障。WARN 是"能用，但还能更好"，建议按顺序处理：`);
-    console.log(`  1. 填 config/pii-rules.json 的 nameDictionary（隐私闸靠它认人名）`);
+    console.log(`  1. 填 config/pii-rules.local.json 的 nameDictionary（隐私闸靠它认人名；该文件不入库）`);
     console.log(`  2. 填 memory/20-scenes/${cfgForFix?.paths?.defaultScene || 'knowledge-digest'}/定位卡.md（AI 的职责边界）`);
     console.log(`  3. 桥没起就跑：cd shell && npm run bridge`);
   } else {

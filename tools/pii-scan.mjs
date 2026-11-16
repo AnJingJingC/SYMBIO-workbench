@@ -15,6 +15,13 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RULES_PATH = path.resolve(__dirname, '..', 'config', 'pii-rules.json');
+// 本地私有覆盖：真名 / 家人姓名 / 账号前缀放这里，**故意不放进主规则文件**。
+// 主文件要进版本库，填真名等于把家人姓名随 git 一起提交、一起同步。
+// 本文件由 .gitignore 排除，只在本机存在；没有它一切照旧。
+const LOCAL_RULES_PATH = path.resolve(__dirname, '..', 'config', 'pii-rules.local.json');
+// 本地文件只允许"加名字"。若允许它改 levels / allowlist，一份本地文件就能悄悄
+// 关掉硬红线，而所有人（包括体检）都以为闸还在。
+const LOCAL_ALLOWED_KEYS = new Set(['nameDictionary']);
 
 function die(msg, code = 1) {
   console.error(JSON.stringify({ error: msg }, null, 2));
@@ -46,16 +53,110 @@ function readStdin() {
   }
 }
 
+function readJsonFile(p) {
+  if (!fs.existsSync(p)) return { missing: true };
+  try {
+    return { data: JSON.parse(fs.readFileSync(p, 'utf8')) };
+  } catch (e) {
+    return { broken: String(e && e.message) };
+  }
+}
+
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 词典条目 → L2 姓名规则。
+ *
+ * 分成两组，因为两类的"边界"不一样：
+ *   - 中文名（张三）：中文没有词边界，直接当子串匹配，加了边界反而漏（"张三说"匹配不到）
+ *   - ASCII（zhangsan / 邮箱前缀）：必须加前后边界，否则 zhang 会命中 zhangwei、@zhang.com
+ *
+ * 长串排在前面：JS 交替式是「从左到右，先匹配先赢」，
+ * 有「李四海」和「李四」两条时必须先匹配长的，否则永远只能截到"李四"。
+ */
+function dictionaryToPatterns(items) {
+  const entries = [];
+  const rejected = [];
+  const seen = new Set();
+  for (const raw of items) {
+    const v = String(raw ?? '').trim();
+    if (!v) continue;
+    // 单字当姓名会几乎命中每一篇中文——比不填更糟，因为会让人习惯性忽略告警
+    if (v.length < 2) {
+      rejected.push({ entry: v, why: '长度 <2：单字当姓名会大面积误杀' });
+      continue;
+    }
+    if (v.length > 32) {
+      rejected.push({ entry: `${v.slice(0, 12)}…`, why: '长度 >32：多半是整句，不是姓名或前缀' });
+      continue;
+    }
+    if (seen.has(v)) continue;
+    seen.add(v);
+    entries.push(v);
+  }
+
+  const sorted = entries.slice().sort((a, b) => b.length - a.length);
+  const cjk = sorted.filter((v) => !/[A-Za-z0-9]/.test(v));
+  const ascii = sorted.filter((v) => /[A-Za-z0-9]/.test(v));
+
+  const patterns = [];
+  if (cjk.length) {
+    patterns.push({
+      id: 'name-dict-cjk',
+      kind: 'name',
+      regex: `(?:${cjk.map(escapeRe).join('|')})`,
+      note: `词典命中（中文名 ${cjk.length} 项）`,
+      dict: true,
+    });
+  }
+  if (ascii.length) {
+    patterns.push({
+      id: 'name-dict-ascii',
+      kind: 'name',
+      regex: `(?<![A-Za-z0-9])(?:${ascii.map(escapeRe).join('|')})(?![A-Za-z0-9])`,
+      note: `词典命中（ASCII 名/账号前缀 ${ascii.length} 项）`,
+      dict: true,
+    });
+  }
+  return { patterns, entries, rejected };
+}
+
 function loadRules() {
-  if (!fs.existsSync(RULES_PATH)) {
+  const main = readJsonFile(RULES_PATH);
+  if (main.missing) {
     // 保守兜底：规则缺失时一切按 L2 处理
     return { __missing: true };
   }
-  try {
-    return JSON.parse(fs.readFileSync(RULES_PATH, 'utf8'));
-  } catch (e) {
-    return { __broken: String(e && e.message) };
+  if (main.broken) return { __broken: main.broken };
+  const rules = main.data;
+
+  // 合并词典：主文件（可入库的通用项）+ 本地私有文件（真名，不入库）
+  const local = readJsonFile(LOCAL_RULES_PATH);
+  const dict = [];
+  if (Array.isArray(rules.nameDictionary)) dict.push(...rules.nameDictionary);
+  if (local.data) {
+    const illegal = Object.keys(local.data).filter((k) => !LOCAL_ALLOWED_KEYS.has(k) && !k.startsWith('$'));
+    // 非法键只报不用：本地文件若写了 levels/allowlist，一笔都不生效
+    if (illegal.length) rules.__localRejectedKeys = illegal;
+    if (Array.isArray(local.data.nameDictionary)) dict.push(...local.data.nameDictionary);
+  } else if (local.broken) {
+    // 本地文件坏了**不能**把整份规则判死：它是"加名字"的附件，
+    // 坏了只该少认几个名字，不该让硬红线一起失效。要报出来，不静默。
+    rules.__localBroken = local.broken;
   }
+
+  const built = dictionaryToPatterns(dict);
+  rules.__dictionary = { entries: built.entries.length, rejected: built.rejected };
+  if (built.patterns.length) {
+    const L2 = rules.levels?.L2;
+    if (L2) {
+      // 放在最前：精确的姓名/前缀优先于宽泛的正则
+      L2.patterns = [...built.patterns, ...(L2.patterns || [])];
+    }
+  }
+  return rules;
 }
 
 // 坏规则必须报出来。曾经这里 catch 后直接 continue，结果一条写了 (?i) 的规则
@@ -180,6 +281,14 @@ function main() {
       }
     }
     const okOut = { total, broken: bad.length, rules: bad };
+    // 词典条目也算规则（编译不过就等于没在保护），一并自检并报出被拒条目
+    okOut.dictionary = {
+      entries: rules.__dictionary?.entries || 0,
+      rejected: rules.__dictionary?.rejected || [],
+      localFile: fs.existsSync(LOCAL_RULES_PATH) ? LOCAL_RULES_PATH : null,
+      localBroken: rules.__localBroken || null,
+      localRejectedKeys: rules.__localRejectedKeys || [],
+    };
     console.log(JSON.stringify(okOut, null, 2));
     process.exit(bad.length ? 3 : 0);
   }
@@ -284,6 +393,14 @@ function main() {
     result.allowlisted = allowlisted;
     result.allowlistNote = `${n} 处命中是公开示例值（allowlist.exact），已放行且不外发；如认为不该放行，从 config/pii-rules.json 的 allowlist 里删掉该串。`;
   }
+
+  // 配置层面的告警：本地私有词典坏了、或被塞了不该有的键。都不影响裁决，
+  // 但必须让调用方看得见——静默失效正是这条闸历史上最大的问题。
+  const cfgWarn = [];
+  if (rules.__localBroken) cfgWarn.push(`config/pii-rules.local.json 解析失败（${rules.__localBroken}），本次只用了主规则 + 主词典`);
+  if (rules.__localRejectedKeys?.length) cfgWarn.push(`config/pii-rules.local.json 含不允许的键（${rules.__localRejectedKeys.join('、')}），已忽略；该文件只允许 nameDictionary`);
+  if (rules.__dictionary?.rejected?.length) cfgWarn.push(`${rules.__dictionary.rejected.length} 条词典条目被拒（${rules.__dictionary.rejected.map((x) => `${x.entry}: ${x.why}`).join('；')}）`);
+  if (cfgWarn.length) result.configWarnings = cfgWarn;
 
   if (args.redact && verdict !== 'BLOCK') {
     const r = redact(text, rules);
