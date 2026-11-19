@@ -111,3 +111,39 @@
 **已接入健康快照**：新增「宿主迁移预检」检查项，以后装机前后各跑一次即可提前发现同类风险，不必再等一轮回滚。
 
 **唯一待办**：Harness → 重启 Harness，然后看 `harness.log` 是否还有 `migration failed` / `profile maintenance frozen`。若仍有，按点名的包走同一排查路径（查它的 `dependencies` 是否含 `@deepseek-ai/*`，或 peer 区间是否覆盖本机内核）。
+
+## 九、重启结果：前两类故障已消失，暴露出结构性根因（2026-11-20 01:01）
+
+**两个实验包的问题确实解决了**。本次启动（`17:01:14Z`）迁移清单 30 项、**不再出现** `does not resolve from the installation closure`，也没有任何 peer 校验失败。
+
+**但迁移仍然失败，形态换成拉包阶段**：
+
+- `generation-install: pinned staging to https://mirrors.cloud.tencent.com/npm`
+- `ERR_PNPM_FETCH_404 GET https://mirrors.cloud.tencent.com/npm/@dsh-pet%2Fbridge: Not Found - 404`
+- `migration failed, restoring the pre-upgrade profile: could not stage @dsh-pet/bridge`
+- `profile maintenance frozen: migration deferred (could not stage @dsh-pet/bridge)`
+
+**根因不是那个包，而是"本地安装的包在 manifest 里被记成了版本号"**：
+
+- `@dsh-pet/bridge` 的现有代际锁里写的是 `@dsh-pet/bridge@file:source/dsh-pet+bridge` —— 它当初是从本地源码目录装的，**从来没有上过 registry**；镜像与 npmmirror 实测均 404。
+- 而 `profiles/web/package.json` 里它是 `"@dsh-pet/bridge": "0.2.0"`，**纯版本号，一处 `file:` 都不剩**（`grep -c "file:"` = 0）。
+- `profiles/web/pnpm-lock.yaml` 现在只剩 `dshmarket` 一个包（1.4KB 的残桩），插件依赖图整段没了。
+- 结果：迁移 staging 按版本号去 registry 拉 → 404 → 整批回滚。
+
+**这不是孤例，是这一类**。预检工具扫出 30 项里 **14 项是本地来源**装的：`dsh-codepect`、`dsh-foundation-logs`、`dsh-global-commander`、`dsh-jinyiwei-monitor`、`dsh-monolingual`、`dsh-multipane`、`dsh-node-flow`、`dsh-our-free-model`、`@dsh-pet/bridge`、`dsh-resilience-guard`、`dsh-self-evolve`、`dsh-workbuddy-approval`、`dsh-workbuddy-sync`、`symbio-workbench`。
+
+其中至少三个**不在 registry**（镜像实测 404）：`@dsh-pet/bridge`、`dsh-node-flow`、`symbio-workbench`。`symbio-workbench` 更典型——它的代际锁指向 `…/Local/Temp/dsh-workbench-local-E88sJT/workbench.tgz`，一个**早已不存在的临时目录**，而 npm 上从来没有这个包。这正是 `INSTALL.md` 里那条"每次启动都喊 `ERR_PNPM_FETCH_404 … symbio-workbench`"的真正机制。
+
+**所以结论要改口径**：
+
+- 迁移失败**不是**"再卸一个实验包就能好"的问题。删掉两个实验包是对的（它们确实各自额外制造了一次失败），但删完之后露出来的是更底层的一条：**只要 profile 里有任何一个只在本地存在、没上 registry 的包，generations 迁移就不可能成功**。`symbio-workbench` 是本工作台本体，必须常驻 → 这台机器上迁移注定 frozen。
+- 它**不影响功能**：迁移只回滚"迁代际"这一步，profile 照旧从既有 live 代际启动；本次实测 `symbio-workbench` 仍指 `0.5.5+a5efb2b0c62e`，四插件注册完好。
+- 时间线还提示一个可能的触发点：`package.json` 的改写时间 00:55 与本次卸载市场包吻合，`file:` 记录可能是那次改写时丢的。**这条只是机制自洽、时间吻合，因果未证**，不作定论。
+
+**该怎么办（三条路，按可行性排序）**：
+
+1. **接受 frozen，不再追**。把它当"这套本地装机方式的固有现象"记档，功能无损；每轮启动多几秒和一行日志而已。本文此前"卸载即可解除"的预期到此修正。
+2. **宿主侧**：`plugin_manager` 写 profile manifest 时保留 `file:`/本地来源（或迁移时跳过非 registry 包），这样迁移才能对本地包成立。这是唯一能真正修好的方向。
+3. **不发**：把这些包逐个发布到 registry。`symbio-workbench` 属产品本体，不现实，故这条路不给。
+
+**预检工具已按此升级**：新增"本地来源"检查类（只看该包自己的 lock 条目是 `file:`/`link:`，不做全量搜，避免每个代际"自身 file:source"造成的假阳性），当前输出 14 项并直接点名镜像 404 的三个。以后判断"这次重启会不会回滚"，看它比看日志早一步。
