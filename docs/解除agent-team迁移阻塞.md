@@ -62,10 +62,29 @@
 
 **建议同样卸载（仍由宿主执行）**：
 
-- 它是实验性「自定义插件市场的 Discover 标签页」（0.2.1-alpha.4）。本机另有独立市场插件 `dshmarket@1.73.22`，在 `cordis.yml` 里以 `id: dsh-market` 注册并承担市场能力；卸载这个实验 bundle 不会让插件市场消失，损失仅那个 Discover 标签页。
+- 它是实验性「自定义插件市场的 Discover 标签页」（0.2.1-alpha.4）。本机另有独立市场插件 `dshmarket@1.73.22`，在 `cordis.yml` 里以 `id: dsh-market` 注册并承担市场能力；卸载这个实验 bundle 不会让插件市场消失，损失仅那个 Discover 标签页。（第七节已按新证据修正：实际损失为零。）
 - 方式同上：在宿主内用插件管理入口卸载 `@deepseek-ai/dsh-experimental-plugin-market-bundle`，不要手改 `desired.json`、不要 `pnpm remove`。
 - 卸载后重启，`harness.log` 应**不再**出现 `migration failed` / `profile maintenance frozen`；`desired.json` 应剩 30 项，且 `symbio-workbench+0.5.5+a5efb2b0c62e` 仍在列。
 
 **对现状无影响的证据**：迁移回滚只回滚「迁代际」这一步，profile 仍按回滚前布局启动；`profiles/web/node_modules/symbio-workbench` 仍指向 `generations/live/symbio-workbench+0.5.5+a5efb2b0c62e`，0.5.5 照常运行。两次回滚都实测如此。
 
 **剩余边界**：上述「唯一一个」是本轮全量扫描的结论。若卸载后迁移仍失败，说明还存在别的形态（例如某个包的 peer 版本区间与宿主不符），按同样方法逐个定位即可——排查路径已固定：看 `migration failed` 点名的包，查它的 `dependencies` 是否含 `@deepseek-ai/*` 内部包，或 peer 区间是否覆盖本机内核版本。
+
+## 七、卸载为何未执行，以及要卸的究竟是哪一份（2026-11-20 00:43 核实）
+
+宿主那个会话回报：未暴露 `plugin_manager` 工具、浏览器桥未连，因此**本次没有执行卸载，也没有改任何文件**。这是真实状态，本文不代签。
+
+顺着这条线索核实，查出一个此前没分清的事实：**同名包在这台机器上存在两份**。
+
+- **随安装提供的一份（实际在跑）**：`…\DSH Desktop\resources\app.asar\node_modules\@deepseek-ai\dsh-experimental-plugin-market-bundle`，版本 **0.2.2-alpha.2**。`cordis.yml` 的 `- id: plugin-market` 明确指向它——`__dshPluginOwner.packageDir` 就是上面这条 asar 路径，`version: 0.2.2-alpha.2`。app.asar 的依赖索引里也记着同一条版本号。
+- **profile 里另装的一份（迁移失败的源头）**：`profiles/web/node_modules/@deepseek-ai/dsh-experimental-plugin-market-bundle`，软链到 `.generations/live/deepseek-ai+dsh-experimental-plugin-market-bundle+0.2.1-alpha.4+3d29186864a1`，版本 **0.2.1-alpha.4**，其 `dependencies` 精确要求 `dsh-plugin-market@0.2.1-alpha.4` 与 `dsh-client-ui-plugin-market@0.2.1-alpha.4`。
+
+`desired.json` 记的是 **0.2.1-alpha.4 那一份**，所以每轮迁移都试图为它建代际，而它的两个内部依赖在 staging 闭包里解析不出来 → `migration failed` → 整批 31 项回滚。
+
+**结论（比第六节更准）**：要卸的是 profile 里这条**冗余旧副本**，不是宿主在跑的那份。因为实际加载的是 app 自带的 0.2.2-alpha.2，卸掉 profile 副本后 **Discover 标签页也还在——功能损失为零**，第六节"损失仅 Discover 标签页"偏保守，以本节为准。
+
+**GUI 路径**：Desktop → 插件（插件管理）页 →「已安装」分组 → 找到 `dsh-experimental-plugin-market-bundle` → 卸载 → 确认移除。
+
+**若 GUI 里这一行是锁定的**：宿主文档口径是「随安装提供的组合包保持锁定」，而这个名字确实随安装提供（asar 内有 0.2.2-alpha.2）。此时 GUI 只认安装自带那一份、可能不给卸 profile 副本，属**产品行为而非操作错误**。这种情况下不要再试 CLI、不要手改 `desired.json`；正确路径是宿主侧处理——发与内核配套的新版本，或在迁移时跳过「与安装自带重复的组合包」。
+
+**关于「agent-team 还会不会卡住」**：不会。`desired.json` 里 `agent-team` 命中为 0；`cordis.yml` 无 agent-team 注册；只在 `node_modules` 残留一个 `dsh-experimental-agent-team-profile`（0.1.5-alpha.2）目录，它不在 desired 列表里，迁移不做校验。当前迁移清单已是 31 项、首项即 market bundle。故"仅卸 market bundle 后仍可能被 agent-team 卡住"与文件事实不符。
