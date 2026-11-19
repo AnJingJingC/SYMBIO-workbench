@@ -333,6 +333,14 @@ function applyFixes(cfg) {
       fixedLog.push(`${memRoot}/50-inbox/${k}/`);
     }
   }
+  // 入站（任务来件）的三个去向：inbound.mjs 用，缺了会自己建，这里补上便于一眼看懂
+  for (const k of ['_inbound', '_inbound/_routed', '_inbound/_unrouted', '_inbound/_blocked']) {
+    const p = abs(`${memRoot}/50-inbox/${k}`);
+    if (!fs.existsSync(p)) {
+      fs.mkdirSync(p, { recursive: true });
+      fixedLog.push(`${memRoot}/50-inbox/${k}/`);
+    }
+  }
 
   // 出厂文件（只补不覆盖）
   const items = [

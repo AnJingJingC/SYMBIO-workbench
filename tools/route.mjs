@@ -195,7 +195,7 @@ async function dispatch({ from, to, task, accept, rootDir }) {
 }
 
 /** 主入口：判定 + （可选）派单。 */
-export async function routeText(text, { dry = false, site = 'qianwen', rootDir = null, accept = '' } = {}) {
+export async function routeText(text, { dry = false, site = 'qianwen', rootDir = null, accept = '', from = SELF } = {}) {
   const home = rootDir || root();
   const scenes = await loadScenes({ rootDir: home });
   if (!scenes.length) {
@@ -250,7 +250,7 @@ export async function routeText(text, { dry = false, site = 'qianwen', rootDir =
   if (!dry) {
     const taskText = text.length > 200 ? text.slice(0, 200) : text;
     result.dispatched = await dispatch({
-      from: SELF,
+      from,
       to: result.scene,
       task: taskText,
       accept: accept || `${result.sceneName} 按自己的定位卡产出；完成后在任务看板回执`,
@@ -316,6 +316,8 @@ async function main() {
     dry: has(args, 'dry'),
     site: flag(args, 'site') || 'qianwen',
     accept: flag(args, 'accept'),
+    // 来源默认记 route；入站链路会传 --from 外来，好让看板分得清"人说的"和"外面来的"
+    from: flag(args, 'from') || SELF,
   });
 
   if (has(args, 'json')) {
