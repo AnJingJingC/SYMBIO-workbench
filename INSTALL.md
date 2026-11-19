@@ -216,5 +216,20 @@ cp -r /e/SYMBIO/.dsh/skills/* "$USERPROFILE/.dsh/skills/"
 | 体检报"缺少 定位卡.md" | 场景目录不完整 | 从模板补建；或重新拷一份 `memory/20-scenes/` |
 | 技能名冲突 | 你之前装过同名技能 | 改名（`symbio-xxx` → `symbio2-xxx`），或删旧的 |
 | DSH 提示 frontmatter 字段不认 | 版本差异（`whenToUse` / `customer-invocable`） | 见 `docs/VERIFY.md`，删掉不认的字段即可，不影响功能 |
-| 宿主启动日志里有 `ERR_PNPM_FETCH_404 … symbio-workbench` 和 `profile maintenance frozen` | 宿主每轮启动都想把插件"迁到 generations"并从 npm 重新拉包，而本包不在 npm 上 | **不用管**。已装的那份照常加载（`.generations/desired.json` 与 `live` 都指向它）。要确认加载的是哪版，看面板徽标或 `/api/symbio/health` 的 `version` |
+| 宿主启动日志里有 `ERR_PNPM_FETCH_404 … symbio-workbench` 和 `profile maintenance frozen` | 宿主每轮启动都想把插件"迁到 generations"并从 npm 重新拉包，而本包不在 npm 上 | **通常不用管**：已装那份照常加载（`.generations/desired.json` 与 `live` 都指向它）。要确认加载的是哪版，看面板徽标或 `/api/symbio/health` 的 `version`。但这不是根治，宿主若改 generations-only 会先坏——预案见下方「404 与 generations 迁移」 |
 | 面板顶栏显示「数据源 未配置」 | `SYMBIO_HOME` 与插件配置 `dataRoot` 都没设，且包不在工作台目录旁边 | 设 `SYMBIO_HOME`，或在宿主插件配置里填 `dataRoot`，重启后页脚会显示来源 |
+
+### 404 与 generations 迁移（不是 bug，但要知道何时该慌）
+
+现象分两种，处理完全不同：
+
+- **只是日志噪音（绝大多数情况）**：启动日志出现 404 + frozen，但面板正常、`/api/symbio/health` 的 `version` 是当前版本。这说明宿主"想从 npm 拉"的尝试失败了，但实际加载走的是 `desired.json` 里的 `link:../.generations/live/symbio-workbench+<版本>+<hash>`。**不用修，也别手动删包**。
+- **真的坏了（少见）**：面板空白或报错、`health` 版本回落、或 `harness/profiles/<profile>/.generations/live/` 下没有 `symbio-workbench+<版本>+<hash>` 目录。此时宿主已不再用旧的那份。
+
+真坏了怎么自救（按顺序）：
+
+1. 先确认身份：`desired.json` 里 `symbio-workbench` 的 `generationId` 是否还在，`live` 目录是否还有对应文件夹。
+2. 用发布仓的 `symbio-workbench-<版本>.tgz` 重新安装一次（宿主会话内调 `install_local_workbench` / `install_bundle`，不要手动 pnpm）。
+3. 若宿主已彻底改为 generations-only 且拒绝本地包，那就只能发布到 npm registry（需要包名与账号），或等宿主放开本地包——这属于宿主行为，工作台侧无法强改。
+
+**边界**：本条只解释现象与自救路径；不能保证宿主未来版本不改变迁移策略，也不建议为了消掉日志去删 `package.json` 里的依赖声明（那是宿主管理的文件，改了会被下一轮重写，还可能让宿主判定 profile 损坏）。
