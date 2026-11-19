@@ -44,3 +44,28 @@
 - 本文只给证据与路径。**我不能代宿主卸载或改 profile**，也不保证卸载后 100% 不再回滚——若还有别的插件 peer 不通过，需要同样逐个排查（但当前日志只点名了 agent-team 一项）。
 - 卸载 agent-team 的实际代价是失去这个实验特性；但它自 2026-11-18 起一直 deferred（`failedAt` 反复刷新），**本来就没有生效**，所以功能性损失为零。
 - 这条路径与 `symbio-workbench` 的 404 是**两件事**：404 是宿主想从 npm 拉本包（已在 `INSTALL.md` 说明），本次日志里没有 404 复现；agent-team 阻塞的是 generations 迁移本身。
+
+## 六、卸载结果与第二轮阻塞（2026-11-20 00:26 实测）
+
+宿主已执行方案 A，卸载**确已生效**：`desired.json` 中 agent-team 条目消失（插件数 32 → 31），`.generations-deferred.json` 也不再存在。
+
+但同一轮启动（`2026-11-19T16:26:01Z`，北京时间 00:26）迁移**仍然回滚**，失败项换成了 `@deepseek-ai/dsh-experimental-plugin-market-bundle`：
+
+- `migration: moving 31 plugin(s) to generations: @deepseek-ai/dsh-experimental-plugin-market-bundle, …`
+- `generation-install: promoted to deepseek-ai+dsh-experimental-plugin-market-bundle+0.2.1-alpha.4+50033ab83c56`
+- `migration failed, restoring the pre-upgrade profile: … failed peer validation: @deepseek-ai/cordis does not resolve from the installation closure; @deepseek-ai/dsh-client-ui-plugin-market does not resolve …; @deepseek-ai/dsh-plugin-market does not resolve …`
+- `profile maintenance frozen: migration deferred (…)`
+
+这正落在第五节写的边界里：agent-team 只是**第一个被点名**的，并非唯一。
+
+**为什么是它（已全量扫过 31 个代际的 package.json）**：它是唯一把宿主内部包写成**普通 `dependencies`** 的插件——`dsh-client-ui-plugin-market@0.2.1-alpha.4`、`dsh-plugin-market@0.2.1-alpha.4` 精确版本，这两个包不在 registry 安装闭包里，staging 装不进来，peer 校验必然挂。其余 30 个（含 `symbio-workbench`、`dsh-ops`、`dsh-multipane` 与四插件）都只用 `peerDependencies` 声明 `@deepseek-ai/cordis`，交给宿主单例解析，因此全部通过。**结论：它是最后一个同形态的阻塞项。**
+
+**建议同样卸载（仍由宿主执行）**：
+
+- 它是实验性「自定义插件市场的 Discover 标签页」（0.2.1-alpha.4）。本机另有独立市场插件 `dshmarket@1.73.22`，在 `cordis.yml` 里以 `id: dsh-market` 注册并承担市场能力；卸载这个实验 bundle 不会让插件市场消失，损失仅那个 Discover 标签页。
+- 方式同上：在宿主内用插件管理入口卸载 `@deepseek-ai/dsh-experimental-plugin-market-bundle`，不要手改 `desired.json`、不要 `pnpm remove`。
+- 卸载后重启，`harness.log` 应**不再**出现 `migration failed` / `profile maintenance frozen`；`desired.json` 应剩 30 项，且 `symbio-workbench+0.5.5+a5efb2b0c62e` 仍在列。
+
+**对现状无影响的证据**：迁移回滚只回滚「迁代际」这一步，profile 仍按回滚前布局启动；`profiles/web/node_modules/symbio-workbench` 仍指向 `generations/live/symbio-workbench+0.5.5+a5efb2b0c62e`，0.5.5 照常运行。两次回滚都实测如此。
+
+**剩余边界**：上述「唯一一个」是本轮全量扫描的结论。若卸载后迁移仍失败，说明还存在别的形态（例如某个包的 peer 版本区间与宿主不符），按同样方法逐个定位即可——排查路径已固定：看 `migration failed` 点名的包，查它的 `dependencies` 是否含 `@deepseek-ai/*` 内部包，或 peer 区间是否覆盖本机内核版本。
