@@ -88,3 +88,26 @@
 **若 GUI 里这一行是锁定的**：宿主文档口径是「随安装提供的组合包保持锁定」，而这个名字确实随安装提供（asar 内有 0.2.2-alpha.2）。此时 GUI 只认安装自带那一份、可能不给卸 profile 副本，属**产品行为而非操作错误**。这种情况下不要再试 CLI、不要手改 `desired.json`；正确路径是宿主侧处理——发与内核配套的新版本，或在迁移时跳过「与安装自带重复的组合包」。
 
 **关于「agent-team 还会不会卡住」**：不会。`desired.json` 里 `agent-team` 命中为 0；`cordis.yml` 无 agent-team 注册；只在 `node_modules` 残留一个 `dsh-experimental-agent-team-profile`（0.1.5-alpha.2）目录，它不在 desired 列表里，迁移不做校验。当前迁移清单已是 31 项、首项即 market bundle。故"仅卸 market bundle 后仍可能被 agent-team 卡住"与文件事实不符。
+
+## 八、卸载已生效，等一次重启出结论（2026-11-20 00:56 核实）
+
+**卸载确已发生**（第二次回报为真）：
+
+- `desired.json` 由 31 项降为 **30 项**，`plugin-market-bundle` 命中 **0**，文件时间 00:55。
+- `profiles/web/node_modules/@deepseek-ai/dsh-experimental-plugin-market-bundle` 软链**已移除**。
+
+**但 Harness 还没重启**：`harness.log` 最后一条仍是心跳（`uptime 1810304ms`，自 16:26 起连续），没有新的 `launch requested`，也就没有新的迁移记录。**所以迁移是否解除还不能下结论**，只能给出"重启前可判定的部分"。
+
+**把这次手工扫描固化成工具**：新增只读预检 `tools/dev/migration-precheck.mjs`，逐个 desired 代际检查两类必挂形态——①把 `@deepseek-ai/*` 宿主内部包写成普通 `dependencies`（11-19、11-20 两次整批回滚的共同成因）；②代际目录缺失或 `package.json` 不可解析。当前实跑结论：
+
+```
+[迁移预检] desired 30 项 · 宿主 cordis 4.0.5
+[风险] 0 项——没有「把宿主内部包当普通依赖」这类必挂形态
+[结论] 无同形态必挂项；真实结果仍以重启后 harness.log 为准
+```
+
+**为免它只是个橡皮章，验过反向路径**：造一个带 `@deepseek-ai/dsh-plugin-market@0.2.1-alpha.4` 普通依赖的假条目，工具 exit 1 并点名该条目、说明为何必挂；peer 区间只展示不自动判定（区间语义多样，自动判定容易误报，反而误导人去改没必要改的包）。
+
+**已接入健康快照**：新增「宿主迁移预检」检查项，以后装机前后各跑一次即可提前发现同类风险，不必再等一轮回滚。
+
+**唯一待办**：Harness → 重启 Harness，然后看 `harness.log` 是否还有 `migration failed` / `profile maintenance frozen`。若仍有，按点名的包走同一排查路径（查它的 `dependencies` 是否含 `@deepseek-ai/*`，或 peer 区间是否覆盖本机内核）。
