@@ -4,16 +4,16 @@
 // 事实约束：业务数字一律来自 src/state.mjs 的真实文件解析；
 // 读不到 → null + issues，接口如实报，不填兜底假值。
 
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readState, readHeartbeats } from './state.mjs';
-import { listTools, runTool } from './tools.mjs';
+import { listTools, runTool, runScript } from './tools.mjs';
 
 export const API_PREFIX = '/api/symbio';
 export const DEFAULT_DATA_ROOT = 'E:/SYMBIO';
-export const VERSION = '0.5.5';
+export const VERSION = '0.5.6';
 
 // 判定"这里是不是一个工作台根"：光有目录不算，得同时有记忆层与工具层。
 // 两个都没有的目录（比如 C:/Windows）绝不会被误认成数据根。
@@ -65,7 +65,9 @@ export const EXPECTED_ASSETS = {
     'symbio-recall', 'symbio-health', 'symbio-dispatch', 'symbio-portrait',
     'symbio-part', 'symbio-evolve',
   ],
-  tools: ['pii-scan', 'memory-lint', 'index-build', 'spend-guard', 'model-probe', 'load-gate'],
+  // 六道闸 + 0.5.6 的两件：出站红线闸（redline-scan）与投递入站（inbound）。
+  // 后两件不走工具箱下拉（入站无输入、红线闸要整段外发文本），各有面板卡片。
+  tools: ['pii-scan', 'memory-lint', 'index-build', 'spend-guard', 'model-probe', 'load-gate', 'redline-scan', 'inbound'],
   layers: ['00-constitution', '10-shared', '20-scenes', '30-personal', '90-archive'],
 };
 
@@ -135,6 +137,69 @@ export async function readJsonBody(request, maximum = 16 * 1024) {
     return value;
   } catch {
     throw new Error('请求体不是合法 JSON。');
+  }
+}
+
+/**
+ * 待处理的入站来件（只读）。
+ *
+ * 口径必须与 tools/inbound.mjs 的 listInbound 完全一致，否则面板显示"3 件"、
+ * 点扫描却处理 0 件——这种不一致比不显示更坏。所以同样只认：顶层文件、
+ * 不以 _ 或 . 开头、扩展名 .md/.txt。
+ */
+const INBOUND_EXTS = new Set(['.md', '.txt']);
+
+async function listInboundPending(root) {
+  const dir = path.resolve(root, 'memory', '50-inbox', '_inbound');
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    return { available: false, reason: error?.code ?? String(error?.message ?? '不可读'), dir, files: [], archived: null };
+  }
+  const files = entries
+    .filter((e) => e.isFile() && !e.name.startsWith('_') && !e.name.startsWith('.') && INBOUND_EXTS.has(path.extname(e.name).toLowerCase()))
+    .map((e) => e.name)
+    .sort();
+  const countDir = async (name) => {
+    try {
+      return (await readdir(path.join(dir, name))).filter((n) => !n.startsWith('.')).length;
+    } catch {
+      return null;
+    }
+  };
+  return {
+    available: true,
+    dir,
+    files,
+    archived: {
+      routed: await countDir('_routed'),
+      unrouted: await countDir('_unrouted'),
+      blocked: await countDir('_blocked'),
+    },
+  };
+}
+
+/**
+ * 解析脚本吐出的 JSON。
+ *
+ * 不能只取最后一行：redline-scan 的 --json 是 pretty-print（多行），
+ * 取最后一行只会拿到 "}"。先整段解析，失败再截首尾大括号兜底。
+ * 两条都失败就返回 null，由调用方按「判不出来」处理，不猜。
+ */
+function parseScriptJson(stdout) {
+  const raw = String(stdout ?? '').trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch { /* 继续兜底 */ }
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return null;
   }
 }
 
@@ -445,6 +510,124 @@ export function createApiRoutes({ bridgeUrl, dataRoot, dataRootSource, selfDir, 
           truncated: raw.trim().length > 8000,
           mode: 'semi-automatic',
           hint: '已生成衔接提示。请人工新建对话后粘贴；本接口不新建/命名/归档任何会话。',
+        });
+      },
+    },
+    {
+      // 出站红线闸（面板「发送前检查」的后端）。
+      // 只判定、不代发：本接口不连任何 IM/邮件，也不把文本发到桥或外网——
+      // 它跑的是本机 tools/redline-scan.mjs，纯正则、零网络。
+      // 失败一律 fail-closed：脚本缺失 → 503；规则坏（退出码 3）→ verdict=rule-error 且 allowed=false，
+      // 让面板显红字"闸坏了先别发"，绝不把判定不出来的情况当成放行。
+      path: `${API_PREFIX}/outbound/check`,
+      methods: ['POST'],
+      requestBody: 'buffered',
+      async fetch(request) {
+        let payload;
+        try {
+          payload = await readJsonBody(request);
+        } catch (error) {
+          return json({ ok: false, errorType: 'bad-request', message: error?.message ?? '请求体无效' }, 400);
+        }
+        const text = typeof payload.text === 'string' ? payload.text : '';
+        if (!text.trim()) {
+          return json({ ok: false, errorType: 'bad-request', message: 'text 为空，未做任何检查。' }, 400);
+        }
+        if (text.length > 4000) {
+          return json({ ok: false, errorType: 'bad-request', message: 'text 超过 4000 字，请分段检查（本接口不截断，截断会漏判）。' }, 400);
+        }
+        if (!root) return missingRoot();
+
+        const run = await runScript(root, 'redline-scan.mjs', ['--text', text, '--json'], { timeout: 20000 });
+        if (!run.ok) {
+          return json({ ok: false, errorType: 'redline-unavailable', message: run.message ?? '红线闸不可用', allowed: false }, 503);
+        }
+
+        const parsed = parseScriptJson(run.stdout);
+        if (!parsed) {
+          // 判不出来就不许放行，也不许假装"已检查通过"
+          return json({
+            ok: false,
+            errorType: 'redline-parse-failed',
+            message: '红线闸没有返回可解析结果，按「先别发」处理。',
+            allowed: false,
+            exitCode: run.exitCode,
+            stderr: String(run.stderr ?? '').slice(0, 400),
+          });
+        }
+
+        const verdict = run.exitCode === 2 ? 'block'
+          : run.exitCode === 1 ? 'warn'
+            : run.exitCode === 0 ? 'pass'
+              : 'rule-error';
+        return json({
+          ok: true,
+          verdict,
+          allowed: verdict === 'pass' || verdict === 'warn',
+          exitCode: run.exitCode,
+          blocked: parsed.blocked ?? 0,
+          warned: parsed.warned ?? 0,
+          matches: Array.isArray(parsed.matches) ? parsed.matches.slice(0, 12) : [],
+          policy: '只检查，不代发。通过后自行复制到目标处；本接口不写文件、不联网。',
+          checkedAt: new Date().toISOString(),
+        });
+      },
+    },
+    {
+      // 入站待处理清单（只读）：面板显示"待处理 N 件"，避免点扫描前一片空白。
+      path: `${API_PREFIX}/inbound/pending`,
+      methods: ['GET'],
+      requestBody: 'buffered',
+      async fetch() {
+        if (!root) return missingRoot();
+        return json({ ok: true, ...(await listInboundPending(root)) });
+      },
+    },
+    {
+      // 入站扫描：把 _inbound/ 里的来件按「隐私闸 → 判场景 → 派单 → 归档」处理一轮。
+      // 会移动文件、会写任务看板，属显式动作；默认真跑，dry=true 只判定不动文件。
+      // 退出码 1 表示"有件需人看"（未路由/被拦），不是接口失败，如实回 warn 数。
+      path: `${API_PREFIX}/inbound/scan`,
+      methods: ['POST'],
+      requestBody: 'buffered',
+      async fetch(request) {
+        let dry = false;
+        try {
+          const p = await readJsonBody(request);
+          dry = !!p?.dry;
+        } catch { /* 空 body 视为真跑 */ }
+        if (!root) return missingRoot();
+
+        const args = ['--once', '--json'];
+        if (dry) args.push('--dry');
+        const run = await runScript(root, 'inbound.mjs', args, { timeout: 120000 });
+        if (!run.ok) {
+          return json({ ok: false, errorType: 'inbound-unavailable', message: run.message ?? '入站工具不可用' }, 503);
+        }
+
+        const parsed = parseScriptJson(run.stdout);
+        if (!parsed) {
+          return json({
+            ok: false,
+            errorType: 'inbound-parse-failed',
+            message: '入站工具没有返回可解析结果。',
+            exitCode: run.exitCode,
+            stderr: String(run.stderr ?? '').slice(0, 400),
+          });
+        }
+        return json({
+          ok: true,
+          dry,
+          exitCode: run.exitCode,
+          routed: parsed.routed ?? 0,
+          warn: parsed.warn ?? 0,
+          results: Array.isArray(parsed.results) ? parsed.results.slice(0, 50) : [],
+          // 退出码 1 = 有件进了 _unrouted/_blocked，要人看；与"接口坏了"是两回事
+          needsAttention: run.exitCode === 1,
+          note: run.exitCode === 1
+            ? '有来件需人工处置：未路由的在 _unrouted/，隐私命中的在 _blocked/（后者连路由都没走）。'
+            : null,
+          checkedAt: new Date().toISOString(),
         });
       },
     },

@@ -138,6 +138,45 @@ function cap(s, limit = 10000) {
   return s.length > limit ? s.slice(0, limit) + '\n…(输出过长已截断)' : s;
 }
 
+/**
+ * 跑一个「有专用面板入口」的本机脚本（redline-scan / inbound）。
+ *
+ * 为什么不塞进 TOOL_REGISTRY：注册表是「单输入框 + 复选框」模型，入站没有输入、
+ * 红线闸要的是整段外发文本，硬塞会变成"看得见点不动"。这里复用同一套执行纪律
+ * （execFile 无 shell、参数数组、超时、输出裁剪），只是不入册。
+ *
+ * 返回值与 runTool 同形：ok 表示"执行器本身可用"，exitCode 才是脚本的判定。
+ */
+export async function runScript(dataRoot, script, args = [], { timeout = 30000 } = {}) {
+  const file = path.resolve(dataRoot, 'tools', script);
+  try {
+    await stat(file);
+  } catch {
+    return { ok: false, errorType: 'missing', message: `工具文件不存在：${script}（dataRoot=${dataRoot}）` };
+  }
+
+  try {
+    const { stdout, stderr } = await execFileP('node', [file, ...args], {
+      cwd: dataRoot,
+      timeout,
+      maxBuffer: 2 * 1024 * 1024,
+      windowsHide: true,
+    });
+    return { ok: true, exitCode: 0, stdout: cap(stdout, 200000), stderr: cap(stderr, 4000) };
+  } catch (e) {
+    const exitCode = typeof e.code === 'number' ? e.code : -1;
+    const timedOut = e.killed || e.signal === 'SIGTERM';
+    return {
+      ok: true,
+      exitCode,
+      stdout: cap(e.stdout || '', 200000),
+      stderr: cap(e.stderr || '', 4000),
+      timedOut,
+      message: timedOut ? `脚本执行超时（>${Math.round(timeout / 1000)}s）` : undefined,
+    };
+  }
+}
+
 export async function runTool(name, dataRoot, opts = {}) {
   const tool = TOOL_REGISTRY[name];
   if (!tool) return { ok: false, errorType: 'unknown-tool', message: `未知工具：${name}` };

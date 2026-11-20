@@ -119,9 +119,9 @@ test('数据根未配置时如实报未配置，且不拿 null 去拼路径', as
   }
 })
 
-test('设计清单与 SYMBIO 的十技能六工具五层一致', () => {
+test('设计清单与 SYMBIO 的十技能八工具五层一致', () => {
   assert.equal(EXPECTED_ASSETS.skills.length, 10)
-  assert.equal(EXPECTED_ASSETS.tools.length, 6)
+  assert.equal(EXPECTED_ASSETS.tools.length, 8)
   assert.equal(EXPECTED_ASSETS.layers.length, 5)
   assert.ok(EXPECTED_ASSETS.skills.includes('symbio-intake'))
   assert.ok(EXPECTED_ASSETS.tools.includes('load-gate'))
@@ -154,7 +154,9 @@ test('所有路由都在自己的 /api/symbio/ 前缀下', () => {
     `${API_PREFIX}/bridge/health`,
     `${API_PREFIX}/bridge/login`, `${API_PREFIX}/bridge/hide`,
     `${API_PREFIX}/tools`, `${API_PREFIX}/tools/run`, `${API_PREFIX}/ask`,
-    `${API_PREFIX}/handoff/prepare`, `${API_PREFIX}/intake`,
+    `${API_PREFIX}/handoff/prepare`, `${API_PREFIX}/outbound/check`,
+    `${API_PREFIX}/inbound/pending`, `${API_PREFIX}/inbound/scan`,
+    `${API_PREFIX}/intake`,
   ])
   for (const route of createApiRoutes({})) {
     assert.equal(typeof route.fetch, 'function')
@@ -225,7 +227,7 @@ test('解析器：真实文件 → 真实数字，表格/卡片/资产都能对�
     assert.equal(s.handoff.status, '已有一张卡。')
     assert.ok(s.handoff.next.includes('继续投喂'))
     assert.equal(s.assets.skills.length, 10)
-    assert.equal(s.assets.tools.length, 6)
+    assert.equal(s.assets.tools.length, 8, '六道闸 + redline-scan + inbound（0.5.6 新增两件）')
     assert.equal(s.memory.layers.length, 5)
     assert.ok(s.memory.totalFiles >= 5)
     assert.equal(s.privacyDoc.loaded, true)
@@ -455,7 +457,7 @@ test('真机数据源（若存在）：关键不变量仍成立', async () => {
   assert.equal(s.ok, true, `真机数据源读取异常：${JSON.stringify(s.issues)}`)
   assert.equal(s.config.stage, 'A')
   assert.ok(s.assets.skills.length >= 11, '技能 ≥11（含 symbio-rollback）')
-  assert.equal(s.assets.tools.length, 6)
+  assert.equal(s.assets.tools.length, 8, '六道闸 + redline-scan + inbound（0.5.6 新增两件）')
   assert.equal(s.queue.tasks.length, 0, '看板当前应无未闭环任务')
   // 卡片数不设固定值：用户真的落了卡之后，硬编码 0 会让测试永久失败（2026-11-04 已踩）。
   // 断言改为「数据源真实」——total 必须等于卡片目录里的实际卡片数（不含索引），不许编造。
@@ -951,5 +953,138 @@ test('全新工作台没有索引不算故障；有卡片却没索引才算真�
     )
   } finally {
     await rm(tmp, { recursive: true, force: true })
+  }
+})
+
+// ---- 0.5.6 新增：出站红线闸与投递入站的面板接口 ----
+// 这两条接口是"面板按钮"的后端，所以这里锁的是**接口纪律**，不是规则本身：
+// 脚本退出码怎么映射成 verdict、判不出来时是否放行、工具缺失是否如实报。
+// 规则内容由 tools/dev/selftest.mjs 的 16 条红线断言负责，不在这里重复。
+
+async function makePanelRoot({ redline, inbound } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'symbio-panel-'))
+  await mkdir(path.join(root, 'tools'), { recursive: true })
+  if (redline) await writeFile(path.join(root, 'tools', 'redline-scan.mjs'), redline, 'utf8')
+  if (inbound) await writeFile(path.join(root, 'tools', 'inbound.mjs'), inbound, 'utf8')
+  return root
+}
+
+const REDLINE_STUB = `
+const t = process.argv[process.argv.indexOf('--text') + 1] || ''
+const bad = /退款|1999/.test(t)
+const out = { ok: !bad, exit: bad ? 2 : 0, blocked: bad ? 1 : 0, warned: 0,
+  matches: bad ? [{ id: 'refund-promise', level: 'L1', hit: '退款' }] : [] }
+console.log(JSON.stringify(out))
+process.exit(bad ? 2 : 0)
+`
+
+test('outbound/check：退出码 2 → block 且 allowed=false；0 → pass 且 allowed=true', async () => {
+  const root = await makePanelRoot({ redline: REDLINE_STUB })
+  try {
+    const check = createApiRoutes({ dataRoot: root }).find((r) => r.path === `${API_PREFIX}/outbound/check`)
+    assert.ok(check, '应有 outbound/check 路由')
+
+    const bad = await check.fetch(new Request('http://x', { method: 'POST', body: JSON.stringify({ text: '不满意就退款' }) }))
+    const badBody = await bad.json()
+    assert.equal(badBody.ok, true)
+    assert.equal(badBody.verdict, 'block')
+    assert.equal(badBody.allowed, false, '命中硬拦时绝不能 allowed=true')
+    assert.equal(badBody.blocked, 1)
+    assert.equal(badBody.matches[0].id, 'refund-promise')
+
+    const good = await check.fetch(new Request('http://x', { method: 'POST', body: JSON.stringify({ text: '明天的会议改到十点' }) }))
+    const goodBody = await good.json()
+    assert.equal(goodBody.verdict, 'pass')
+    assert.equal(goodBody.allowed, true)
+    assert.deepEqual(goodBody.matches, [])
+    assert.match(goodBody.policy, /不代发/, '必须写明面板只检查不代发')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('outbound/check：空文本与超长文本直接拒绝，不做截断检查', async () => {
+  const root = await makePanelRoot({ redline: REDLINE_STUB })
+  try {
+    const check = createApiRoutes({ dataRoot: root }).find((r) => r.path === `${API_PREFIX}/outbound/check`)
+    const empty = await check.fetch(new Request('http://x', { method: 'POST', body: JSON.stringify({ text: '   ' }) }))
+    assert.equal(empty.status, 400)
+    assert.equal((await empty.json()).errorType, 'bad-request')
+
+    const long = await check.fetch(new Request('http://x', { method: 'POST', body: JSON.stringify({ text: 'a'.repeat(4001) }) }))
+    assert.equal(long.status, 400, '超长要拒绝，不能悄悄截断后放行')
+    assert.match((await long.json()).message, /4000/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('outbound/check：闸缺失或判不出来时一律 fail-closed', async () => {
+  const empty = await makePanelRoot({})
+  const broken = await makePanelRoot({ redline: "console.log('not json')\nprocess.exit(0)\n" })
+  try {
+    const missingRoute = createApiRoutes({ dataRoot: empty }).find((r) => r.path === `${API_PREFIX}/outbound/check`)
+    const mres = await missingRoute.fetch(new Request('http://x', { method: 'POST', body: JSON.stringify({ text: '随便' }) }))
+    assert.equal(mres.status, 503)
+    const mbody = await mres.json()
+    assert.equal(mbody.ok, false)
+    assert.equal(mbody.errorType, 'redline-unavailable')
+    assert.equal(mbody.allowed, false, '工具缺失时绝不能 allowed=true')
+
+    const brokenRoute = createApiRoutes({ dataRoot: broken }).find((r) => r.path === `${API_PREFIX}/outbound/check`)
+    const bres = await brokenRoute.fetch(new Request('http://x', { method: 'POST', body: JSON.stringify({ text: '随便' }) }))
+    const bbody = await bres.json()
+    assert.equal(bbody.ok, false)
+    assert.equal(bbody.errorType, 'redline-parse-failed')
+    assert.equal(bbody.allowed, false, '解析失败也必须按「先别发」处理')
+  } finally {
+    await rm(empty, { recursive: true, force: true })
+    await rm(broken, { recursive: true, force: true })
+  }
+})
+
+test('inbound/pending：只认顶层 .md/.txt，跳过 _ 开头与目录', async () => {
+  const root = await makePanelRoot({})
+  try {
+    const dir = path.join(root, 'memory/50-inbox/_inbound')
+    await mkdir(path.join(dir, '_routed'), { recursive: true })
+    await writeFile(path.join(dir, 'a.md'), '内容', 'utf8')
+    await writeFile(path.join(dir, 'b.txt'), '内容', 'utf8')
+    await writeFile(path.join(dir, '_state.json'), '{}', 'utf8')
+    await writeFile(path.join(dir, 'c.json'), '{}', 'utf8')
+    await writeFile(path.join(dir, '_routed', 'old.md'), '内容', 'utf8')
+
+    const route = createApiRoutes({ dataRoot: root }).find((r) => r.path === `${API_PREFIX}/inbound/pending`)
+    const body = await (await route.fetch()).json()
+    assert.equal(body.ok, true)
+    assert.equal(body.available, true)
+    assert.deepEqual(body.files, ['a.md', 'b.txt'], '口径必须与 inbound.mjs 的 listInbound 一致')
+    assert.equal(body.archived.routed, 1)
+    assert.equal(body.archived.unrouted, null, '目录不存在时如实给 null，不编 0')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('inbound/scan：退出码 1 不是接口失败，要如实标 needsAttention', async () => {
+  const root = await makePanelRoot({
+    inbound: `
+console.log(JSON.stringify({ routed: 0, warn: 1, results: [{ file: 'a.md', verdict: 'unrouted', why: 'judge-none' }] }))
+process.exit(1)
+`,
+  })
+  try {
+    const scan = createApiRoutes({ dataRoot: root }).find((r) => r.path === `${API_PREFIX}/inbound/scan`)
+    const body = await (await scan.fetch(new Request('http://x', { method: 'POST', body: JSON.stringify({ dry: false }) }))).json()
+    assert.equal(body.ok, true, '有件需人看不等于接口坏了')
+    assert.equal(body.needsAttention, true)
+    assert.equal(body.warn, 1)
+    assert.equal(body.results[0].verdict, 'unrouted')
+    assert.match(body.note, /_unrouted/)
+
+    const dryBody = await (await scan.fetch(new Request('http://x', { method: 'POST', body: JSON.stringify({ dry: true }) }))).json()
+    assert.equal(dryBody.dry, true)
+  } finally {
+    await rm(root, { recursive: true, force: true })
   }
 })

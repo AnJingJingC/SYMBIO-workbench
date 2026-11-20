@@ -194,7 +194,10 @@ async function processOne(file, ctx) {
 async function sweep(ctx) {
   const files = await listInbound();
   if (!files.length) {
-    if (!ctx.json) console.log('[入站] 没有待处理文件');
+    // --json 也是"有结果"：空轮必须回一个空结果对象，否则调用方（面板接口）
+    // 拿到空 stdout 只能判成解析失败——把"没事干"报成"工具坏了"，是两种不同的错。
+    if (ctx.json) process.stdout.write(`${JSON.stringify({ routed: 0, warn: 0, results: [] })}\n`);
+    else console.log('[入站] 没有待处理文件');
     return [];
   }
   const results = [];
