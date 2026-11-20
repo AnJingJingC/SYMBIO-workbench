@@ -218,6 +218,7 @@ cp -r /e/SYMBIO/.dsh/skills/* "$USERPROFILE/.dsh/skills/"
 | DSH 提示 frontmatter 字段不认 | 版本差异（`whenToUse` / `customer-invocable`） | 见 `docs/VERIFY.md`，删掉不认的字段即可，不影响功能 |
 | 宿主启动日志里有 `ERR_PNPM_FETCH_404 … symbio-workbench`（或 `@dsh-pet/bridge` / `dsh-node-flow` 等）和 `profile maintenance frozen` | 宿主每轮启动都想把插件"迁到 generations"，并按 profile manifest 里记的**纯版本号**去 registry 拉包；而本包只在本地存在（代际锁里是 `file:…workbench.tgz`，且那个临时目录通常已不存在），npm 上从来没有这个包 → staging 404 → 整批迁移回滚 | **通常不用管**：迁移只回滚"迁代际"这一步，profile 照旧从既有 live 代际启动，功能无损（实测 0.5.5 正常加载、四插件注册完好）。要确认加载的是哪版，看面板徽标或 `/api/symbio/health` 的 `version`。**这不是靠卸载某个插件能解决的**——本机 30 个插件里有 14 个是本地来源装的，其中 3 个不在 registry，只要 `symbio-workbench` 常驻，迁移就注定失败。根治只有宿主在写 manifest 时保留 `file:`/本地来源（或迁移时跳过非 registry 包）。预案与证据见下方「404 与 generations 迁移」 |
 | 面板顶栏显示「数据源 未配置」 | `SYMBIO_HOME` 与插件配置 `dataRoot` 都没设，且包不在工作台目录旁边 | 设 `SYMBIO_HOME`，或在宿主插件配置里填 `dataRoot`，重启后页脚会显示来源 |
+| 切到「SYMBIO 工作台」只看到会话内容，左侧没有业务面板 | 宿主开着「多栏目视图」，工作台区域的布局被它接管，业务面板被挤掉 | 关掉多栏目视图，面板立刻回来（2026-11-20 真机确认）。与工作台版本无关，0.5.5 同样如此 |
 
 ### 404 与 generations 迁移（不是 bug，但要知道何时该慌）
 
